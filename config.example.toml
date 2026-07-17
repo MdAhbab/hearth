@@ -1,0 +1,40 @@
+# Hearth configuration.
+# Copy to your per-user data directory as config.toml:
+#   macOS:   ~/Library/Application Support/Hearth/config.toml
+#   Windows: %LOCALAPPDATA%\Hearth\config.toml
+#   Linux:   ~/.local/share/Hearth/config.toml
+# All values shown are the defaults; omit anything you don't want to override.
+# The Settings screen in the app edits this file for you.
+
+[model]
+provider = "ollama"
+name = "gemma4:e2b"        # switch to "gemma4:e4b" on a 16 GB+ machine
+context_length = 4096
+max_agent_steps = 6
+keep_alive = "5m"          # how long Ollama keeps the model in memory after a request
+
+[ollama]
+host = "127.0.0.1"
+port = 11434
+autostart = true           # start `ollama serve` automatically when needed
+startup_timeout_s = 20
+request_timeout_s = 120
+
+[gmail]
+# Path to the OAuth "Desktop app" credentials JSON you download from
+# Google Cloud Console (see docs/google-oauth.md). Tokens are stored in the
+# OS credential store (Keychain / Credential Locker / Secret Service),
+# never on disk.
+credentials_file = ""
+
+[calendar]
+# "auto" = native EventKit on macOS, Google Calendar on Windows/Linux.
+# Force with "eventkit" or "google".
+backend = "auto"
+
+[files]
+max_read_bytes = 262144    # 256 KiB cap for file reads shown to the model
+
+[web]
+max_fetch_bytes = 500000
+fetch_timeout_s = 20.0
