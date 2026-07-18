@@ -21,7 +21,16 @@ from collections.abc import Callable
 
 from .storage.db import Database
 
-TOGGLE_KEYS = ("system", "shortcuts", "automation", "web", "calendar", "reminders", "weather")
+TOGGLE_KEYS = (
+    "system",
+    "shortcuts",
+    "automation",
+    "web",
+    "calendar",
+    "reminders",
+    "weather",
+    "mcp",
+)
 
 PERMISSION_LABELS: dict[str, tuple[str, str]] = {
     "gmail": ("Gmail", "Search, read, draft, and send email (send/draft always confirmed)"),
@@ -34,6 +43,10 @@ PERMISSION_LABELS: dict[str, tuple[str, str]] = {
     "reminders": (
         "Reminders",
         "List, add, and complete reminders (native on macOS, local on others)",
+    ),
+    "mcp": (
+        "MCP servers",
+        "Let external MCP tools run (each call is confirmed; servers set in config.toml)",
     ),
     "weather": (
         "Weather",

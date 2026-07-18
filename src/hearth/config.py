@@ -62,6 +62,16 @@ class FilesConfig(BaseModel):
     max_read_bytes: int = 262_144
 
 
+class MCPServerConfig(BaseModel):
+    name: str
+    command: str
+    args: list[str] = Field(default_factory=list)
+
+
+class MCPConfig(BaseModel):
+    servers: list[MCPServerConfig] = Field(default_factory=list)
+
+
 class UIConfig(BaseModel):
     # "system" follows the OS appearance; or force "dark" / "light".
     theme: str = "system"
@@ -80,6 +90,7 @@ class Config(BaseModel):
     files: FilesConfig = Field(default_factory=FilesConfig)
     web: WebConfig = Field(default_factory=WebConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
 
     @classmethod
     def load(cls, path: Path | None = None) -> Config:
@@ -113,5 +124,12 @@ class Config(BaseModel):
                 else:
                     escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
                     lines.append(f'{key} = "{escaped}"')
+            lines.append("")
+        for server in self.mcp.servers:
+            lines.append("[[mcp.servers]]")
+            lines.append(f'name = "{server.name}"')
+            lines.append(f'command = "{server.command}"')
+            args = ", ".join(f'"{a}"' for a in server.args)
+            lines.append(f"args = [{args}]")
             lines.append("")
         path.write_text("\n".join(lines), encoding="utf-8")

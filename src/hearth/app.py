@@ -22,6 +22,7 @@ from .connectors.calendar import make_calendar_store, register_calendar_tools
 from .connectors.files import ApprovedRoots, register_file_tools
 from .connectors.gmail import GoogleGmailClient, register_gmail_tools
 from .connectors.google_auth import CALENDAR_SCOPES, GMAIL_SCOPES, GoogleAuth
+from .connectors.mcp import MCPManager
 from .connectors.reminders import register_reminders_tools
 from .connectors.system import register_sysinfo_tools, register_system_tools
 from .connectors.utility import register_utility_tools
@@ -143,6 +144,7 @@ class HearthApp:
         register_sysinfo_tools(self.registry)
         register_reminders_tools(self.registry, self.db)
         register_weather_tools(self.registry)
+        self.mcp = MCPManager(self.config.mcp, self.registry)
 
     def _notify(self, title: str, message: str) -> None:
         self._tray.showMessage(title, message)
@@ -278,6 +280,8 @@ class HearthApp:
                 state = RuntimeState.MODEL_MISSING
                 self.runtime.state = state
             self._set_status_for_state(state)
+            if self.config.mcp.servers and self.permissions.check("mcp"):
+                await self.mcp.start()
         except Exception:  # noqa: BLE001 — status check must never crash startup
             log.exception("Startup check failed")
             self.window.set_status("Model: status unknown")
@@ -286,6 +290,7 @@ class HearthApp:
         self.chat.cancel_open_cards()
         if self._active_task and not self._active_task.done():
             self._active_task.cancel()
+        self.mcp.kill_all()
         self.runtime.shutdown()
         self.db.close()
 
