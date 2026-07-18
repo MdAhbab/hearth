@@ -47,9 +47,19 @@ class HistoryView(QWidget):
         self._table.verticalHeader().hide()
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         layout.addWidget(self._table, stretch=1)
-        self.refresh()
+        self._dirty = True
+
+    def mark_dirty(self) -> None:
+        """Cheap signal that rows changed; the rebuild waits until the tab is shown."""
+        self._dirty = True
+
+    def showEvent(self, event) -> None:  # noqa: N802 — Qt override
+        super().showEvent(event)
+        if self._dirty:
+            self.refresh()
 
     def refresh(self) -> None:
+        self._dirty = False
         rows = self._db.list_actions()
         self._table.setRowCount(len(rows))
         for i, row in enumerate(rows):

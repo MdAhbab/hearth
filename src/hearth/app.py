@@ -37,7 +37,7 @@ from .ui.history_view import HistoryView
 from .ui.main_window import MainWindow
 from .ui.permission_center import PermissionCenter
 from .ui.settings_view import SettingsView
-from .ui.theme import STYLESHEET
+from .ui.theme import apply_theme
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +111,12 @@ class HearthApp:
         self._history: list[ChatMessage] = []
         self._active_task: asyncio.Task | None = None
 
+        apply_theme(self._qt, self.config.ui.theme)
+        try:
+            self._qt.styleHints().colorSchemeChanged.connect(self._on_system_scheme_changed)
+        except AttributeError:
+            pass  # older Qt without the signal: no live follow, still themed
+
         self._qt.aboutToQuit.connect(self._shutdown)
 
     # -- wiring ---------------------------------------------------------------
@@ -146,7 +152,7 @@ class HearthApp:
     async def _request_approval(self, request: ApprovalRequest) -> ApprovalResponse:
         future = self.chat.show_confirmation(request)
         response: ApprovalResponse = await future
-        self.history_view.refresh()
+        self.history_view.mark_dirty()
         return response
 
     # -- Google connect ----------------------------------------------------------
@@ -163,7 +169,12 @@ class HearthApp:
         self.google_auth.disconnect()
         self.db.set_connector_status("gmail", "revoked")
 
+    def _on_system_scheme_changed(self, *_args) -> None:
+        if self.config.ui.theme == "system":
+            apply_theme(self._qt, "system")
+
     def _on_settings_saved(self, config: Config) -> None:
+        apply_theme(self._qt, config.ui.theme)
         self.runtime.update_config(config.ollama)
         self.provider = OllamaProvider(config.model, config.ollama)
         self.agent = AgentLoop(
@@ -211,7 +222,7 @@ class HearthApp:
                 elif event.kind == "tool_started":
                     self.chat.add_tool_note(f"Running {event.tool}…")
                 elif event.kind == "tool_finished":
-                    self.history_view.refresh()
+                    self.history_view.mark_dirty()
 
             async with self.runtime.generation_lock:
                 answer = await self.agent.run(
@@ -285,7 +296,6 @@ def main() -> None:
     signal.signal(signal.SIGINT, lambda *_: app.quit())
     signal.signal(signal.SIGTERM, lambda *_: app.quit())
     app.setApplicationName("Hearth")
-    app.setStyleSheet(STYLESHEET)
 
     import qasync
 

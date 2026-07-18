@@ -57,6 +57,11 @@ class ChatView(QWidget):
         self._on_stop = on_stop
         self._streaming_label: QLabel | None = None
         self._streaming_text = ""
+        self._pending_text = ""
+        self._thinking_frame = 0
+        self._flush_timer = QTimer(self)
+        self._flush_timer.setInterval(80)
+        self._flush_timer.timeout.connect(self._flush_stream)
         self._open_cards: list[ConfirmationCard] = []
 
         layout = QVBoxLayout(self)
@@ -73,6 +78,23 @@ class ChatView(QWidget):
         self._messages.addStretch(1)
         self._scroll.setWidget(canvas)
         layout.addWidget(self._scroll, stretch=1)
+
+        # Welcome empty state — replaced by the conversation on first message.
+        self._welcome: QWidget | None = QWidget()
+        welcome_box = QVBoxLayout(self._welcome)
+        welcome_box.setContentsMargins(8, 40, 8, 8)
+        greeting = QLabel("Welcome to Hearth")
+        greeting.setProperty("h1", True)
+        greeting.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sub = QLabel(
+            "Everything runs on this machine. Grant what you want in Permissions,\n"
+            "then ask below — anything that changes data will ask you first."
+        )
+        sub.setProperty("muted", True)
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        welcome_box.addWidget(greeting)
+        welcome_box.addWidget(sub)
+        self._messages.insertWidget(0, self._welcome)
 
         chips = QHBoxLayout()
         chips.setSpacing(6)
@@ -121,8 +143,15 @@ class ChatView(QWidget):
 
     # -- rendering ---------------------------------------------------------
 
+    MAX_RENDERED_MESSAGES = 200  # keeps day-long sessions from growing without bound
+
     def _add_widget(self, widget: QWidget) -> None:
         self._messages.insertWidget(self._messages.count() - 1, widget)
+        # +1 accounts for the trailing stretch item.
+        while self._messages.count() > self.MAX_RENDERED_MESSAGES + 1:
+            item = self._messages.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
         QTimer.singleShot(30, self._scroll_to_bottom)
 
     def _scroll_to_bottom(self) -> None:
@@ -153,7 +182,14 @@ class ChatView(QWidget):
         return label
 
     def add_user_message(self, text: str) -> None:
+        self._dismiss_welcome()
         self._bubble("user", text)
+
+    def _dismiss_welcome(self) -> None:
+        if self._welcome is not None:
+            self._messages.removeWidget(self._welcome)
+            self._welcome.deleteLater()
+            self._welcome = None
 
     def add_assistant_message(self, text: str) -> None:
         self._bubble("assistant", text)
@@ -169,25 +205,49 @@ class ChatView(QWidget):
         self._add_widget(frame)
 
     # -- streaming ----------------------------------------------------------
+    #
+    # Chunks arrive per token; setText per token forces a relayout each time.
+    # Buffer them and flush on a timer instead — one relayout per ~80 ms.
+    # Until the first token lands, the same timer animates a thinking pulse.
+
+    _THINKING_FRAMES = ("·", "· ·", "· · ·")
 
     def begin_stream(self) -> None:
         self._streaming_text = ""
-        self._streaming_label = self._bubble("assistant", "…")
+        self._pending_text = ""
+        self._thinking_frame = 0
+        self._streaming_label = self._bubble("assistant", self._THINKING_FRAMES[0])
+        self._flush_timer.start()
 
     def stream_chunk(self, text: str) -> None:
         if self._streaming_label is None:
             self.begin_stream()
-        self._streaming_text += text
-        self._streaming_label.setText(self._streaming_text)
+        self._pending_text += text
+
+    def _flush_stream(self) -> None:
+        if self._streaming_label is None:
+            return
+        if self._pending_text:
+            self._streaming_text += self._pending_text
+            self._pending_text = ""
+            self._streaming_label.setText(self._streaming_text)
+            self._scroll_to_bottom()
+        elif not self._streaming_text:
+            self._thinking_frame = (self._thinking_frame + 1) % len(self._THINKING_FRAMES)
+            self._streaming_label.setText(self._THINKING_FRAMES[self._thinking_frame])
 
     def end_stream(self, final_text: str) -> None:
+        self._flush_timer.stop()
         if self._streaming_label is not None:
             if final_text:
                 self._streaming_label.setText(final_text)
-            elif not self._streaming_text:
+            elif self._streaming_text:
+                self._streaming_label.setText(self._streaming_text)
+            else:
                 self._streaming_label.parentWidget().hide()
         self._streaming_label = None
         self._streaming_text = ""
+        self._pending_text = ""
 
     # -- confirmation cards ---------------------------------------------------
 

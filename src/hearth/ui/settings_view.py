@@ -7,6 +7,7 @@ from collections.abc import Callable
 
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -77,6 +78,25 @@ class SettingsView(QWidget):
         model_layout.addWidget(self._autostart)
         layout.addWidget(model_frame)
 
+        appearance_frame = QFrame()
+        appearance_frame.setProperty("card", True)
+        appearance_layout = QVBoxLayout(appearance_frame)
+        aheading = QLabel("Appearance")
+        aheading.setProperty("h2", True)
+        appearance_layout.addWidget(aheading)
+        theme_row = QHBoxLayout()
+        theme_label = QLabel("Theme")
+        theme_label.setProperty("muted", True)
+        theme_label.setMinimumWidth(220)
+        self._theme = QComboBox()
+        self._theme.addItems(["System", "Dark", "Light"])
+        current = {"system": 0, "dark": 1, "light": 2}.get(config.ui.theme, 0)
+        self._theme.setCurrentIndex(current)
+        theme_row.addWidget(theme_label)
+        theme_row.addWidget(self._theme, stretch=1)
+        appearance_layout.addLayout(theme_row)
+        layout.addWidget(appearance_frame)
+
         google_frame = QFrame()
         google_frame.setProperty("card", True)
         google_layout = QVBoxLayout(google_frame)
@@ -126,6 +146,7 @@ class SettingsView(QWidget):
         self._config.model.keep_alive = self._keep_alive.text().strip() or "5m"
         self._config.ollama.autostart = self._autostart.isChecked()
         self._config.gmail.credentials_file = self._credentials.text().strip()
+        self._config.ui.theme = ["system", "dark", "light"][self._theme.currentIndex()]
         self._config.save()
         self._on_saved(self._config)
         self._status.setText("Saved. Model changes apply to the next message.")

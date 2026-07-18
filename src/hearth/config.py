@@ -62,6 +62,11 @@ class FilesConfig(BaseModel):
     max_read_bytes: int = 262_144
 
 
+class UIConfig(BaseModel):
+    # "system" follows the OS appearance; or force "dark" / "light".
+    theme: str = "system"
+
+
 class WebConfig(BaseModel):
     max_fetch_bytes: int = 500_000
     fetch_timeout_s: float = 20.0
@@ -74,6 +79,7 @@ class Config(BaseModel):
     calendar: CalendarConfig = Field(default_factory=CalendarConfig)
     files: FilesConfig = Field(default_factory=FilesConfig)
     web: WebConfig = Field(default_factory=WebConfig)
+    ui: UIConfig = Field(default_factory=UIConfig)
 
     @classmethod
     def load(cls, path: Path | None = None) -> Config:
@@ -96,6 +102,7 @@ class Config(BaseModel):
             ("calendar", self.calendar),
             ("files", self.files),
             ("web", self.web),
+            ("ui", self.ui),
         ):
             lines.append(f"[{section}]")
             for key, value in model.model_dump().items():
