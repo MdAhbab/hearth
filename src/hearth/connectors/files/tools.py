@@ -262,3 +262,76 @@ def register_file_tools(
             preview=lambda p: f"Move to Trash: {p.path}\n(Recoverable from the macOS Trash)",
         )
     )
+
+    # ---- Capability 1: full-text content search with line-level snippets ----
+
+    class ContentSearchParams(BaseModel):
+        keyword: str = Field(min_length=1, max_length=200, description="Word or phrase to search for inside file contents")
+        folder: str = Field(default="", description="Optional subfolder to restrict the search (must be inside an approved folder)")
+        case_sensitive: bool = Field(default=False, description="Whether the search is case-sensitive")
+
+    async def search_content(p: ContentSearchParams) -> ToolResult:
+        base = _guard(p.folder) if p.folder else None
+        if isinstance(base, ToolResult):
+            return base
+
+        def _search_content() -> ToolResult:
+            search_roots = [base] if base else roots.roots()
+            needle = p.keyword if p.case_sensitive else p.keyword.lower()
+            hits: list[dict] = []
+            files_scanned = 0
+            for root in search_roots:
+                for path in sorted(root.rglob("*")):
+                    if len(hits) >= 50:
+                        break
+                    if path.name.startswith(".") or not path.is_file():
+                        continue
+                    if path.suffix.lower() not in TEXT_SUFFIXES:
+                        continue
+                    if path.stat().st_size > 2_000_000:
+                        continue  # skip very large files
+                    try:
+                        text = path.read_text(errors="ignore")
+                    except OSError:
+                        continue
+                    files_scanned += 1
+                    lines = text.splitlines()
+                    for lineno, line in enumerate(lines, start=1):
+                        haystack = line if p.case_sensitive else line.lower()
+                        if needle in haystack:
+                            hits.append({
+                                "file": str(path),
+                                "line": lineno,
+                                "snippet": line.strip()[:300],
+                            })
+                            if len(hits) >= 50:
+                                break
+            return ToolResult(
+                ok=True,
+                data={
+                    "keyword": p.keyword,
+                    "files_scanned": files_scanned,
+                    "match_count": len(hits),
+                    "truncated": len(hits) >= 50,
+                    "matches": hits,
+                },
+            )
+
+        return await asyncio.to_thread(_search_content)
+
+    registry.register(
+        ToolSpec(
+            name="files_search_content",
+            description=(
+                "Search the contents of text files in approved folders for a keyword or phrase. "
+                "Returns matching lines with file path, line number, and a snippet. "
+                "Use this when you need to find where specific text appears inside files."
+            ),
+            params_model=ContentSearchParams,
+            risk=RiskLevel.READ,
+            permission="files",
+            handler=search_content,
+            timeout_s=90,
+        )
+    )
+

@@ -38,3 +38,15 @@ max_read_bytes = 262144    # 256 KiB cap for file reads shown to the model
 [web]
 max_fetch_bytes = 500000
 fetch_timeout_s = 20.0
+
+# ── New capabilities (v0.2) ───────────────────────────────────────────────────
+
+# Reminders are enabled via the Permission Center toggle.
+# On macOS they use native EventKit; on other platforms they use a local
+# SQLite table. No extra config required.
+# [reminders]  # (no options yet)
+
+# Weather uses the free Open-Meteo API (no account, no API key).
+# Enable the "Weather" toggle in the Permission Center.
+# [weather]    # (no options yet)
+

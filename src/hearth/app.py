@@ -21,8 +21,11 @@ from .connectors.calendar import make_calendar_store, register_calendar_tools
 from .connectors.files import ApprovedRoots, register_file_tools
 from .connectors.gmail import GoogleGmailClient, register_gmail_tools
 from .connectors.google_auth import CALENDAR_SCOPES, GMAIL_SCOPES, GoogleAuth
-from .connectors.system import register_system_tools
+from .connectors.reminders import register_reminders_tools
+from .connectors.system import register_sysinfo_tools, register_system_tools
 from .connectors.utility import register_utility_tools
+from .connectors.weather import register_weather_tools
+
 from .logging_setup import setup_logging
 from .permissions import Permissions
 from .runtime.ollama_manager import OllamaRuntimeManager, RuntimeState
@@ -131,6 +134,9 @@ class HearthApp:
             notifier=self._notify,
             approved_shortcuts=self.db.list_approved_shortcuts,
         )
+        register_sysinfo_tools(self.registry)
+        register_reminders_tools(self.registry, self.db)
+        register_weather_tools(self.registry)
 
     def _notify(self, title: str, message: str) -> None:
         self._tray.showMessage(title, message)

@@ -258,3 +258,97 @@ def _register_macos_tools(
             handler=chrome_tab,
         )
     )
+
+
+# ---- Capability 2: system info tools (always registered, cross-platform) ----
+
+def register_sysinfo_tools(registry: ToolRegistry) -> None:
+    """Register disk-usage and process-list tools. Uses psutil — cross-platform."""
+    try:
+        import psutil
+    except ImportError:
+        return  # psutil not installed — skip gracefully
+
+    class DiskUsageParams(BaseModel):
+        path: str = Field(
+            default="/",
+            description="Filesystem path to check (e.g. '/' on macOS/Linux, 'C:\\\\' on Windows)",
+        )
+
+    class ProcessListParams(BaseModel):
+        top_n: int = Field(
+            default=15,
+            ge=1,
+            le=50,
+            description="How many processes to return, sorted by CPU usage descending",
+        )
+
+    async def disk_usage(p: DiskUsageParams) -> ToolResult:
+        def _du() -> ToolResult:
+            try:
+                usage = psutil.disk_usage(p.path)
+            except (FileNotFoundError, PermissionError) as exc:
+                return ToolResult(ok=False, error=f"Cannot read disk usage for '{p.path}': {exc}")
+            gb = 1024 ** 3
+            return ToolResult(
+                ok=True,
+                data={
+                    "path": p.path,
+                    "total_gb": round(usage.total / gb, 2),
+                    "used_gb": round(usage.used / gb, 2),
+                    "free_gb": round(usage.free / gb, 2),
+                    "percent_used": usage.percent,
+                },
+            )
+        return await asyncio.to_thread(_du)
+
+    async def process_list(p: ProcessListParams) -> ToolResult:
+        def _ps() -> ToolResult:
+            procs = []
+            for proc in psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent"]):
+                try:
+                    info = proc.info
+                    procs.append({
+                        "pid": info["pid"],
+                        "name": info["name"] or "",
+                        "cpu_percent": round(info["cpu_percent"] or 0.0, 1),
+                        "memory_percent": round(info["memory_percent"] or 0.0, 1),
+                    })
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            procs.sort(key=lambda x: x["cpu_percent"], reverse=True)
+            return ToolResult(
+                ok=True,
+                data={"processes": procs[: p.top_n], "total_visible": len(procs)},
+            )
+        return await asyncio.to_thread(_ps)
+
+    registry.register(
+        ToolSpec(
+            name="system_disk_usage",
+            description=(
+                "Report free, used, and total disk space for a filesystem path. "
+                "Defaults to the root/main drive. Results in GB and percent used."
+            ),
+            params_model=DiskUsageParams,
+            risk=RiskLevel.READ,
+            permission="system",
+            handler=disk_usage,
+            timeout_s=10,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            name="system_running_processes",
+            description=(
+                "List the top running processes sorted by CPU usage, with their name, "
+                "PID, CPU%, and memory%. This is read-only — no process can be killed."
+            ),
+            params_model=ProcessListParams,
+            risk=RiskLevel.READ,
+            permission="system",
+            handler=process_list,
+            timeout_s=10,
+        )
+    )
+

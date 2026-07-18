@@ -30,11 +30,13 @@ Three rules define it:
 |---|---|---|
 | **Gmail** | Search mail, read messages, summarize threads | Create drafts, send email |
 | **Calendar** | List calendars/events, find free slots | Create, update, delete events |
-| **Files** | List, search, read text files in approved folders | Create, move/rename, delete (→ Trash) |
-| **System** | Reveal files, notifications, read clipboard, open apps (macOS) | Open URLs, write clipboard, run approved macOS Shortcuts |
+| **Files** | List, search, read text files in approved folders; **search file contents with line-level snippets** | Create, move/rename, delete (→ Trash) |
+| **System** | Reveal files, notifications, read clipboard, open apps (macOS), **disk usage**, **top processes** | Open URLs, write clipboard, run approved macOS Shortcuts |
+| **Reminders** | List open reminders (native EventKit on macOS, local on others) | Create, complete reminders |
 | **Browser** | Read active Chrome tab title/URL (macOS, opt-in) | — |
 | **Web** | Fetch a page as text (opt-in, off by default) | — |
-| **Utilities** | Current date/time, exact arithmetic | — |
+| **Weather** | Current conditions + today's forecast for any city (opt-in, free Open-Meteo API — no key) | — |
+| **Utilities** | Current date/time, exact arithmetic, **unit conversion (length/mass/temp/speed/area/volume/data/time)** | — |
 
 Calendar uses native EventKit on macOS (Google calendars already synced to
 Apple Calendar just work) and the Google Calendar API on Windows/Linux.
@@ -42,6 +44,7 @@ Apple Calendar just work) and the Google Calendar API on Windows/Linux.
 What Hearth deliberately does **not** have: arbitrary shell or AppleScript
 execution, unrestricted filesystem access, screen control, telemetry, cloud
 model fallback, background monitoring, or autonomous scheduled actions.
+
 
 ## What you need to download
 

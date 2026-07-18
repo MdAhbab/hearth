@@ -64,6 +64,18 @@ MIGRATIONS: list[str] = [
         value TEXT NOT NULL
     );
     """,
+    # v2 — cross-platform reminders (fallback for Windows/Linux; macOS uses EventKit)
+    """
+    CREATE TABLE reminders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        notes TEXT NOT NULL DEFAULT '',
+        due_at REAL,
+        completed INTEGER NOT NULL DEFAULT 0,
+        completed_at REAL,
+        created_at REAL NOT NULL
+    );
+    """,
 ]
 
 
@@ -72,7 +84,8 @@ class Database:
         if path is None:
             app_data_dir().mkdir(parents=True, exist_ok=True)
             path = app_data_dir() / "hearth.db"
-        self._conn = sqlite3.connect(str(path))
+        self._conn = sqlite3.connect(str(path), check_same_thread=False)
+
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
@@ -205,3 +218,39 @@ class Database:
     def get_connector_status(self, name: str) -> str:
         row = self._conn.execute("SELECT status FROM connectors WHERE name = ?", (name,)).fetchone()
         return row["status"] if row else "disconnected"
+
+    # -- reminders (cross-platform fallback) ------------------------------------
+
+    def add_reminder(self, title: str, notes: str = "", due_at: float | None = None) -> int:
+        cur = self._conn.execute(
+            "INSERT INTO reminders (title, notes, due_at, created_at) VALUES (?, ?, ?, ?)",
+            (title, notes, due_at, time.time()),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def list_reminders(self, include_completed: bool = False) -> list[sqlite3.Row]:
+        if include_completed:
+            return self._conn.execute(
+                "SELECT * FROM reminders ORDER BY due_at ASC, created_at ASC"
+            ).fetchall()
+        return self._conn.execute(
+            "SELECT * FROM reminders WHERE completed = 0"
+            " ORDER BY due_at ASC, created_at ASC"
+        ).fetchall()
+
+    def complete_reminder(self, reminder_id: int) -> bool:
+        """Mark a reminder complete. Returns True if a row was updated."""
+        self._conn.execute(
+            "UPDATE reminders SET completed = 1, completed_at = ? WHERE id = ?",
+            (time.time(), reminder_id),
+        )
+        self._conn.commit()
+        return self._conn.execute(
+            "SELECT changes() AS n"
+        ).fetchone()["n"] > 0
+
+    def delete_reminder(self, reminder_id: int) -> bool:
+        self._conn.execute("DELETE FROM reminders WHERE id = ?", (reminder_id,))
+        self._conn.commit()
+        return self._conn.execute("SELECT changes() AS n").fetchone()["n"] > 0

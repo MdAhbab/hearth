@@ -83,12 +83,13 @@ class PermissionCenter(QWidget):
         self._build_calendar_card()
         self._build_folders_card()
         mac_only = ("shortcuts", "automation") if sys.platform == "darwin" else ()
-        for key in ("system", "web", *mac_only):
+        for key in ("system", "web", "reminders", "weather", *mac_only):
             self._build_toggle_card(key)
         if sys.platform == "darwin":
             self._build_shortcuts_card()
         self._list.addStretch(1)
         self.refresh()
+
 
     # -- Gmail ---------------------------------------------------------------
 
@@ -301,6 +302,7 @@ class PermissionCenter(QWidget):
             self._shortcut_list.clear()
             self._shortcut_list.addItems([n for n, _ in self._db.list_approved_shortcuts()])
 
-        for key in ("system", "web", "shortcuts", "automation"):
+        for key in ("system", "web", "shortcuts", "automation", "reminders", "weather"):
             if sync := getattr(self, f"_sync_{key}", None):
                 sync()
+

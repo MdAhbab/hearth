@@ -20,6 +20,7 @@ dependencies = [
     "google-api-python-client>=2.130",
     "pyobjc-framework-EventKit>=10.2; sys_platform == 'darwin'",
     "pyobjc-framework-Cocoa>=10.2; sys_platform == 'darwin'",
+    "psutil>=5.9",
 ]
 
 [project.optional-dependencies]
