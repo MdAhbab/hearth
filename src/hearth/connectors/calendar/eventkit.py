@@ -63,6 +63,15 @@ class EventKitCalendarStore:
         return self._access_granted
 
     def _require_access(self) -> None:
+        """Ensure access for this session, requesting it if needed.
+
+        OS-level authorization persists across launches but the EKEventStore
+        must still be asked once per process; when already authorized the
+        request completes immediately without showing a prompt. Runs inside
+        the worker thread of whichever operation needed it.
+        """
+        if not self._access_granted:
+            self._request_access_sync()
         if not self._access_granted:
             raise CalendarAccessDenied(
                 "Calendar access not granted. Enable it in the Permission Center "
@@ -122,7 +131,9 @@ class EventKitCalendarStore:
 
         return await asyncio.to_thread(_run)
 
-    async def update_event(self, event_id: str, changes: dict) -> EventData:
+    async def update_event(
+        self, event_id: str, changes: dict, calendar_id: str | None = None
+    ) -> EventData:
         def _run() -> EventData:
             self._require_access()
             ek = self._ek()
@@ -147,7 +158,7 @@ class EventKitCalendarStore:
 
         return await asyncio.to_thread(_run)
 
-    async def delete_event(self, event_id: str) -> None:
+    async def delete_event(self, event_id: str, calendar_id: str | None = None) -> None:
         def _run() -> None:
             self._require_access()
             ek = self._ek()

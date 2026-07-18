@@ -1,17 +1,18 @@
 """Tests for weather_current tool with mocked httpx (Capability 4)."""
 
 from __future__ import annotations
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from hearth.agent.tools import ToolRegistry
-from hearth.connectors.weather.tools import register_weather_tools, _degrees_to_compass
-
+from hearth.connectors.weather.tools import _degrees_to_compass, register_weather_tools
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_geocode_response(lat=35.68, lon=139.69, name="Tokyo", country="Japan"):
     mock = MagicMock()
@@ -137,6 +138,7 @@ async def test_weather_latlon_shortcut(registry):
 # ---------------------------------------------------------------------------
 # Compass helper unit test
 # ---------------------------------------------------------------------------
+
 
 def test_compass_directions():
     assert _degrees_to_compass(0) == "N"

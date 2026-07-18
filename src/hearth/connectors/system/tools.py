@@ -262,11 +262,16 @@ def _register_macos_tools(
 
 # ---- Capability 2: system info tools (always registered, cross-platform) ----
 
+
 def register_sysinfo_tools(registry: ToolRegistry) -> None:
-    """Register disk-usage and process-list tools. Uses psutil — cross-platform."""
-    try:
-        import psutil
-    except ImportError:
+    """Register disk-usage and process-list tools. Uses psutil — cross-platform.
+
+    psutil is only imported when a tool actually runs, keeping it out of the
+    startup footprint; availability is checked without importing.
+    """
+    import importlib.util
+
+    if importlib.util.find_spec("psutil") is None:
         return  # psutil not installed — skip gracefully
 
     class DiskUsageParams(BaseModel):
@@ -285,11 +290,13 @@ def register_sysinfo_tools(registry: ToolRegistry) -> None:
 
     async def disk_usage(p: DiskUsageParams) -> ToolResult:
         def _du() -> ToolResult:
+            import psutil
+
             try:
                 usage = psutil.disk_usage(p.path)
             except (FileNotFoundError, PermissionError) as exc:
                 return ToolResult(ok=False, error=f"Cannot read disk usage for '{p.path}': {exc}")
-            gb = 1024 ** 3
+            gb = 1024**3
             return ToolResult(
                 ok=True,
                 data={
@@ -300,20 +307,37 @@ def register_sysinfo_tools(registry: ToolRegistry) -> None:
                     "percent_used": usage.percent,
                 },
             )
+
         return await asyncio.to_thread(_du)
 
     async def process_list(p: ProcessListParams) -> ToolResult:
         def _ps() -> ToolResult:
-            procs = []
-            for proc in psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent"]):
+            import time
+
+            import psutil
+
+            # cpu_percent measures since the previous call, so the first
+            # sample is always 0.0 — prime, wait a beat, then read.
+            handles = []
+            for proc in psutil.process_iter(["pid", "name"]):
                 try:
-                    info = proc.info
-                    procs.append({
-                        "pid": info["pid"],
-                        "name": info["name"] or "",
-                        "cpu_percent": round(info["cpu_percent"] or 0.0, 1),
-                        "memory_percent": round(info["memory_percent"] or 0.0, 1),
-                    })
+                    proc.cpu_percent(None)
+                    handles.append(proc)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            time.sleep(0.25)
+
+            procs = []
+            for proc in handles:
+                try:
+                    procs.append(
+                        {
+                            "pid": proc.pid,
+                            "name": proc.info.get("name") or "",
+                            "cpu_percent": round(proc.cpu_percent(None), 1),
+                            "memory_percent": round(proc.memory_percent(), 1),
+                        }
+                    )
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     continue
             procs.sort(key=lambda x: x["cpu_percent"], reverse=True)
@@ -321,6 +345,7 @@ def register_sysinfo_tools(registry: ToolRegistry) -> None:
                 ok=True,
                 data={"processes": procs[: p.top_n], "total_visible": len(procs)},
             )
+
         return await asyncio.to_thread(_ps)
 
     registry.register(
@@ -351,4 +376,3 @@ def register_sysinfo_tools(registry: ToolRegistry) -> None:
             timeout_s=10,
         )
     )
-

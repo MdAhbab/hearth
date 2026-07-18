@@ -2,6 +2,7 @@
 
 import asyncio
 
+import pytest
 from pydantic import BaseModel
 
 from hearth.agent.tools import RiskLevel, ToolResult, ToolSpec
@@ -41,13 +42,11 @@ async def test_edited_args_are_revalidated_and_used(harness):
 async def test_invalid_edit_rejected(harness):
     harness.approve_next = True
     harness.edited_args = {"text": ""}  # violates min_length
-    try:
-        await harness.gate.execute("echo_write", {"text": "original"})
-        raised = False
-    except Exception:
-        raised = True
-    assert raised
-    assert harness.executed == []
+    result = await harness.gate.execute("echo_write", {"text": "original"})
+    assert not result.ok and "invalid" in result.error.lower()
+    assert harness.executed == []  # nothing ran
+    (action,) = [a for a in harness.gate._db.list_actions() if a["tool"] == "echo_write"]
+    assert action["status"] == "failed"  # audit row closed, not stuck pending
 
 
 async def test_permission_denied_blocks_even_reads(harness):
@@ -114,6 +113,21 @@ async def test_handler_exception_becomes_tool_error(harness, registry):
     )
     result = await harness.gate.execute("boom_tool", {})
     assert not result.ok and "kaput" in result.error
+
+
+async def test_cancel_at_approval_card_closes_audit_row(harness, registry, db):
+    """Stop pressed while a card is open: row must not stay 'pending'."""
+    from hearth.agent.gate import ActionGate
+
+    async def cancelling_approval(request):
+        raise asyncio.CancelledError
+
+    gate = ActionGate(db, registry, harness._check, cancelling_approval)
+    with pytest.raises(asyncio.CancelledError):
+        await gate.execute("echo_write", {"text": "x"})
+    (action,) = [a for a in db.list_actions() if a["tool"] == "echo_write"]
+    assert action["status"] == "cancelled"
+    assert harness.executed == []
 
 
 async def test_audit_trail_completeness(harness, db):

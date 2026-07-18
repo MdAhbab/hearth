@@ -68,6 +68,9 @@ class CreateEventParams(BaseModel):
 
 class UpdateEventParams(BaseModel):
     event_id: str = Field(min_length=1)
+    calendar_id: str = Field(
+        default="", description="Calendar the event lives in (from calendar_list_events)"
+    )
     title: str = Field(default="", description="New title (empty = unchanged)")
     start: str = Field(default="", description="New start (empty = unchanged)")
     end: str = Field(default="", description="New end (empty = unchanged)")
@@ -77,6 +80,9 @@ class UpdateEventParams(BaseModel):
 
 class DeleteEventParams(BaseModel):
     event_id: str = Field(min_length=1)
+    calendar_id: str = Field(
+        default="", description="Calendar the event lives in (from calendar_list_events)"
+    )
     title_confirmation: str = Field(
         default="", description="Title of the event being deleted, for the preview"
     )
@@ -190,11 +196,11 @@ def register_calendar_tools(registry: ToolRegistry, store: CalendarStore) -> Non
             changes["notes"] = p.notes
         if not changes:
             return ToolResult(ok=False, error="No changes given.")
-        updated = await store.update_event(p.event_id, changes)
+        updated = await store.update_event(p.event_id, changes, p.calendar_id or None)
         return ToolResult(ok=True, data=_event_dict(updated))
 
     async def delete_event(p: DeleteEventParams) -> ToolResult:
-        await store.delete_event(p.event_id)
+        await store.delete_event(p.event_id, p.calendar_id or None)
         return ToolResult(ok=True, data=f"Deleted event {p.event_id}")
 
     registry.register(

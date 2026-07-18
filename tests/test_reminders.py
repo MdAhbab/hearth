@@ -6,8 +6,7 @@ is mocked out entirely here.
 """
 
 from __future__ import annotations
-import sys
-import time
+
 from unittest.mock import patch
 
 import pytest
@@ -27,6 +26,7 @@ def registry(db):
     # Force SQLite fallback regardless of platform
     with patch("hearth.connectors.reminders.tools._ek_available", return_value=False):
         from hearth.connectors.reminders.tools import register_reminders_tools
+
         register_reminders_tools(reg, db)
     return reg, db
 
@@ -43,9 +43,7 @@ async def test_create_and_list(registry):
     assert result.data["title"] == "Buy milk"
     reminder_id = result.data["id"]
 
-    list_result = await reg.get("reminders_list").handler(
-        reg.validate_args("reminders_list", {})
-    )
+    list_result = await reg.get("reminders_list").handler(reg.validate_args("reminders_list", {}))
     assert list_result.ok
     assert list_result.data["count"] == 1
     r = list_result.data["reminders"][0]
@@ -107,9 +105,7 @@ async def test_reminder_with_due_date(registry):
         )
     )
     assert result.ok
-    list_result = await reg.get("reminders_list").handler(
-        reg.validate_args("reminders_list", {})
-    )
+    list_result = await reg.get("reminders_list").handler(reg.validate_args("reminders_list", {}))
     r = list_result.data["reminders"][0]
     assert r["due_date"] is not None
     assert "2026-08" in r["due_date"]

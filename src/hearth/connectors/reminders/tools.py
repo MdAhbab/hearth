@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-import time
+import threading
 from datetime import datetime
 from typing import Any
 
@@ -26,10 +26,10 @@ from pydantic import BaseModel, Field
 from ...agent.tools import RiskLevel, ToolRegistry, ToolResult, ToolSpec
 from ...storage.db import Database
 
-
 # ---------------------------------------------------------------------------
 # Pydantic parameter models
 # ---------------------------------------------------------------------------
+
 
 class RemindersListParams(BaseModel):
     include_completed: bool = Field(
@@ -42,7 +42,9 @@ class RemindersCreateParams(BaseModel):
     notes: str = Field(default="", max_length=2000, description="Optional additional notes")
     due_date: str = Field(
         default="",
-        description="Optional due date/time in ISO-8601 format, e.g. '2026-07-20T09:00:00' or '2026-07-20'",
+        description=(
+            "Optional due date/time in ISO-8601 format, e.g. '2026-07-20T09:00:00' or '2026-07-20'"
+        ),
     )
 
 
@@ -61,11 +63,13 @@ class RemindersCompleteParams(BaseModel):
 # macOS EventKit backend
 # ---------------------------------------------------------------------------
 
+
 def _ek_available() -> bool:
     if sys.platform != "darwin":
         return False
     try:
         import EventKit  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -97,152 +101,156 @@ def _row_to_dict(row: Any) -> dict:
     }
 
 
-# macOS EventKit helpers -------------------------------------------------------
+# macOS EventKit backend -------------------------------------------------------
 
-def _ek_list_reminders(include_completed: bool) -> ToolResult:
-    import EventKit
-    store = EventKit.EKEventStore.alloc().init()
-    # Request access (synchronous via semaphore since we're already in a thread)
-    import threading
-    granted_flag = threading.Event()
-    granted_ref = [False]
 
-    def handler(granted, error):
-        granted_ref[0] = granted
-        granted_flag.set()
+class _EventKitReminders:
+    """One shared EKEventStore with a single access request per session.
 
-    store.requestFullAccessToRemindersWithCompletion_(handler)
-    granted_flag.wait(timeout=10)
-    if not granted_ref[0]:
-        return ToolResult(
-            ok=False,
-            error=(
-                "Reminders access was not granted. On macOS, go to System Settings → "
-                "Privacy & Security → Reminders and allow Hearth."
-            ),
-        )
+    OS authorization persists across launches; when already authorized the
+    request completes immediately with no prompt. All methods run inside
+    worker threads (EKEventStore is documented thread-safe).
+    """
 
-    default_list = store.defaultCalendarForNewReminders()
-    calendars = [default_list] if default_list else store.calendarsForEntityType_(
-        EventKit.EKEntityTypeReminder
+    _ACCESS_DENIED = ToolResult(
+        ok=False,
+        error=(
+            "Reminders access was not granted. On macOS, go to System Settings → "
+            "Privacy & Security → Reminders and allow Hearth."
+        ),
     )
-    predicate = store.predicateForRemindersInCalendars_(calendars)
-    all_reminders = store.remindersMatchingPredicate_(predicate) or []
-    items = []
-    for r in all_reminders:
-        if not include_completed and r.isCompleted():
-            continue
-        due = r.dueDateComponents()
-        due_str = None
-        if due:
-            try:
-                import Foundation
-                cal = Foundation.NSCalendar.currentCalendar()
-                comps = Foundation.NSDateComponents.alloc().init()
-                comps.setYear_(due.year())
-                comps.setMonth_(due.month())
-                comps.setDay_(due.day())
-                comps.setHour_(due.hour())
-                comps.setMinute_(due.minute())
-                ns_date = cal.dateFromComponents_(comps)
-                if ns_date:
-                    due_str = datetime.fromtimestamp(ns_date.timeIntervalSince1970()).strftime(
-                        "%Y-%m-%dT%H:%M:%S"
-                    )
-            except Exception:
-                pass
-        items.append({
-            "id": r.calendarItemIdentifier(),
-            "title": r.title() or "",
-            "notes": r.notes() or "",
-            "due_date": due_str,
-            "completed": bool(r.isCompleted()),
-        })
-    return ToolResult(ok=True, data={"reminders": items, "count": len(items)})
 
+    def __init__(self) -> None:
+        self._store = None
+        self._granted = False
+        self._lock = threading.Lock()
 
-def _ek_create_reminder(title: str, notes: str, due_at: float | None) -> ToolResult:
-    import EventKit
-    store = EventKit.EKEventStore.alloc().init()
-    import threading
-    granted_flag = threading.Event()
-    granted_ref = [False]
+    def _ensure_access(self) -> bool:
+        import EventKit
 
-    def handler(granted, error):
-        granted_ref[0] = granted
-        granted_flag.set()
+        with self._lock:
+            if self._granted:
+                return True
+            if self._store is None:
+                self._store = EventKit.EKEventStore.alloc().init()
+            done = threading.Event()
+            granted_ref = [False]
 
-    store.requestFullAccessToRemindersWithCompletion_(handler)
-    granted_flag.wait(timeout=10)
-    if not granted_ref[0]:
-        return ToolResult(ok=False, error="Reminders access not granted.")
+            def handler(granted, error):
+                granted_ref[0] = bool(granted)
+                done.set()
 
-    reminder = EventKit.EKReminder.reminderWithEventStore_(store)
-    reminder.setTitle_(title)
-    if notes:
-        reminder.setNotes_(notes)
-    if due_at:
+            self._store.requestFullAccessToRemindersWithCompletion_(handler)
+            done.wait(timeout=120)
+            self._granted = granted_ref[0]
+            return self._granted
+
+    def list(self, include_completed: bool) -> ToolResult:
+        import EventKit
+
+        if not self._ensure_access():
+            return self._ACCESS_DENIED
+        store = self._store
+        default_list = store.defaultCalendarForNewReminders()
+        calendars = (
+            [default_list]
+            if default_list
+            else store.calendarsForEntityType_(EventKit.EKEntityTypeReminder)
+        )
+        predicate = store.predicateForRemindersInCalendars_(calendars)
+        all_reminders = store.remindersMatchingPredicate_(predicate) or []
+        items = []
+        for r in all_reminders:
+            if not include_completed and r.isCompleted():
+                continue
+            items.append(
+                {
+                    "id": r.calendarItemIdentifier(),
+                    "title": r.title() or "",
+                    "notes": r.notes() or "",
+                    "due_date": _components_to_iso(r.dueDateComponents()),
+                    "completed": bool(r.isCompleted()),
+                }
+            )
+        return ToolResult(ok=True, data={"reminders": items, "count": len(items)})
+
+    def create(self, title: str, notes: str, due_at: float | None) -> ToolResult:
+        import EventKit
         import Foundation
-        ns_date = Foundation.NSDate.dateWithTimeIntervalSince1970_(due_at)
+
+        if not self._ensure_access():
+            return self._ACCESS_DENIED
+        store = self._store
+        reminder = EventKit.EKReminder.reminderWithEventStore_(store)
+        reminder.setTitle_(title)
+        if notes:
+            reminder.setNotes_(notes)
+        if due_at:
+            ns_date = Foundation.NSDate.dateWithTimeIntervalSince1970_(due_at)
+            cal = Foundation.NSCalendar.currentCalendar()
+            comps = cal.components_(
+                Foundation.NSCalendarUnitYear
+                | Foundation.NSCalendarUnitMonth
+                | Foundation.NSCalendarUnitDay
+                | Foundation.NSCalendarUnitHour
+                | Foundation.NSCalendarUnitMinute,
+                ns_date,
+            )
+            reminder.setDueDateComponents_(comps)
+        reminder.setCalendar_(store.defaultCalendarForNewReminders())
+        ok, error = store.saveReminder_commit_error_(reminder, True, None)
+        if not ok:
+            return ToolResult(ok=False, error=f"EventKit save failed: {error}")
+        return ToolResult(ok=True, data={"id": reminder.calendarItemIdentifier(), "title": title})
+
+    def complete(self, reminder_id: str) -> ToolResult:
+        import EventKit
+        import Foundation
+
+        if not self._ensure_access():
+            return self._ACCESS_DENIED
+        store = self._store
+        item = store.calendarItemWithIdentifier_(reminder_id)
+        if item is None or not isinstance(item, EventKit.EKReminder):
+            return ToolResult(ok=False, error=f"Reminder not found: {reminder_id}")
+        item.setCompleted_(True)
+        item.setCompletionDate_(Foundation.NSDate.date())
+        ok, error = store.saveReminder_commit_error_(item, True, None)
+        if not ok:
+            return ToolResult(ok=False, error=f"EventKit save failed: {error}")
+        return ToolResult(ok=True, data={"id": reminder_id, "completed": True})
+
+
+def _components_to_iso(due) -> str | None:
+    """Convert NSDateComponents to an ISO string, or None."""
+    if due is None:
+        return None
+    try:
+        import Foundation
+
         cal = Foundation.NSCalendar.currentCalendar()
-        comps = cal.components_(
-            Foundation.NSCalendarUnitYear
-            | Foundation.NSCalendarUnitMonth
-            | Foundation.NSCalendarUnitDay
-            | Foundation.NSCalendarUnitHour
-            | Foundation.NSCalendarUnitMinute,
-            ns_date,
-        )
-        reminder.setDueDateComponents_(comps)
-    reminder.setCalendar_(store.defaultCalendarForNewReminders())
-    error_ref = [None]
-    ok = store.saveReminder_commit_error_(reminder, True, error_ref)
-    if not ok:
-        return ToolResult(ok=False, error=f"EventKit save failed: {error_ref[0]}")
-    return ToolResult(ok=True, data={"id": reminder.calendarItemIdentifier(), "title": title})
-
-
-def _ek_complete_reminder(reminder_id: str) -> ToolResult:
-    import EventKit
-    store = EventKit.EKEventStore.alloc().init()
-    import threading
-    granted_flag = threading.Event()
-    granted_ref = [False]
-
-    def handler(granted, error):
-        granted_ref[0] = granted
-        granted_flag.set()
-
-    store.requestFullAccessToRemindersWithCompletion_(handler)
-    granted_flag.wait(timeout=10)
-    if not granted_ref[0]:
-        return ToolResult(ok=False, error="Reminders access not granted.")
-
-    item = store.calendarItemWithIdentifier_(reminder_id)
-    if item is None:
-        return ToolResult(ok=False, error=f"Reminder not found: {reminder_id}")
-    item.setCompleted_(True)
-    item.setCompletionDate_(
-        __import__("Foundation").NSDate.date()
-    )
-    error_ref = [None]
-    ok = store.saveReminder_commit_error_(item, True, error_ref)
-    if not ok:
-        return ToolResult(ok=False, error=f"EventKit save failed: {error_ref[0]}")
-    return ToolResult(ok=True, data={"id": reminder_id, "completed": True})
+        ns_date = cal.dateFromComponents_(due)
+        if ns_date is None:
+            return None
+        return datetime.fromtimestamp(ns_date.timeIntervalSince1970()).strftime("%Y-%m-%dT%H:%M:%S")
+    except Exception:  # noqa: BLE001 — malformed components shouldn't break listing
+        return None
 
 
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
 
+
 def register_reminders_tools(registry: ToolRegistry, db: Database) -> None:
     """Register reminder tools. Uses EventKit on macOS, SQLite fallback elsewhere."""
     use_ek = _ek_available()
+    ek_backend = _EventKitReminders() if use_ek else None
 
     async def reminders_list(p: RemindersListParams) -> ToolResult:
         if use_ek:
-            return await asyncio.to_thread(_ek_list_reminders, p.include_completed)
+            return await asyncio.to_thread(ek_backend.list, p.include_completed)
+
         # SQLite fallback
         def _list() -> ToolResult:
             rows = db.list_reminders(include_completed=p.include_completed)
@@ -253,23 +261,27 @@ def register_reminders_tools(registry: ToolRegistry, db: Database) -> None:
                     "count": len(rows),
                 },
             )
+
         return await asyncio.to_thread(_list)
 
     async def reminders_create(p: RemindersCreateParams) -> ToolResult:
         due_at = _parse_due(p.due_date)
         if use_ek:
-            return await asyncio.to_thread(_ek_create_reminder, p.title, p.notes, due_at)
+            return await asyncio.to_thread(ek_backend.create, p.title, p.notes, due_at)
+
         def _create() -> ToolResult:
             row_id = db.add_reminder(p.title, p.notes, due_at)
             return ToolResult(
                 ok=True,
                 data={"id": str(row_id), "title": p.title, "due_date": p.due_date or None},
             )
+
         return await asyncio.to_thread(_create)
 
     async def reminders_complete(p: RemindersCompleteParams) -> ToolResult:
         if use_ek:
-            return await asyncio.to_thread(_ek_complete_reminder, p.reminder_id)
+            return await asyncio.to_thread(ek_backend.complete, p.reminder_id)
+
         def _complete() -> ToolResult:
             try:
                 rid = int(p.reminder_id)
@@ -279,6 +291,7 @@ def register_reminders_tools(registry: ToolRegistry, db: Database) -> None:
             if not updated:
                 return ToolResult(ok=False, error=f"No reminder found with ID {rid}")
             return ToolResult(ok=True, data={"id": str(rid), "completed": True})
+
         return await asyncio.to_thread(_complete)
 
     registry.register(

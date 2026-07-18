@@ -208,9 +208,7 @@ class OllamaProvider:
                                     args = json.loads(args)
                                 except json.JSONDecodeError:
                                     args = {}
-                            tool_calls.append(
-                                ToolCall(name=fn.get("name", ""), arguments=args)
-                            )
+                            tool_calls.append(ToolCall(name=fn.get("name", ""), arguments=args))
                         if chunk.get("done"):
                             break
 

@@ -29,6 +29,7 @@ async def _convert(registry, value, from_unit, to_unit):
 # Length
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_km_to_miles(registry):
     result = await _convert(registry, 1.0, "km", "miles")
@@ -47,6 +48,7 @@ async def test_feet_to_metres(registry):
 # ---------------------------------------------------------------------------
 # Temperature (offset conversions)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_celsius_to_fahrenheit(registry):
@@ -73,6 +75,7 @@ async def test_celsius_to_kelvin(registry):
 # Mass
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_kg_to_pounds(registry):
     result = await _convert(registry, 1.0, "kg", "pounds")
@@ -91,6 +94,7 @@ async def test_ounces_to_grams(registry):
 # Speed
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_mph_to_kph(registry):
     result = await _convert(registry, 60.0, "mph", "kph")
@@ -101,6 +105,7 @@ async def test_mph_to_kph(registry):
 # ---------------------------------------------------------------------------
 # Data
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_gb_to_mb(registry):
@@ -113,6 +118,7 @@ async def test_gb_to_mb(registry):
 # Volume
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_litres_to_gallons(registry):
     result = await _convert(registry, 1.0, "litre", "gallon")
@@ -124,6 +130,7 @@ async def test_litres_to_gallons(registry):
 # Time
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_hours_to_seconds(registry):
     result = await _convert(registry, 2.0, "hours", "seconds")
@@ -134,6 +141,7 @@ async def test_hours_to_seconds(registry):
 # ---------------------------------------------------------------------------
 # Error cases
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_unknown_unit(registry):

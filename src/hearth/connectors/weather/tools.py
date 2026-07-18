@@ -26,15 +26,29 @@ _UA = "Hearth/0.1 (local personal AI; contact: open-source project)"
 # WMO weather interpretation codes → human-readable string
 _WMO_CODES: dict[int, str] = {
     0: "Clear sky",
-    1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
-    45: "Foggy", 48: "Depositing rime fog",
-    51: "Light drizzle", 53: "Moderate drizzle", 55: "Dense drizzle",
-    61: "Slight rain", 63: "Moderate rain", 65: "Heavy rain",
-    71: "Slight snow", 73: "Moderate snow", 75: "Heavy snow",
+    1: "Mainly clear",
+    2: "Partly cloudy",
+    3: "Overcast",
+    45: "Foggy",
+    48: "Depositing rime fog",
+    51: "Light drizzle",
+    53: "Moderate drizzle",
+    55: "Dense drizzle",
+    61: "Slight rain",
+    63: "Moderate rain",
+    65: "Heavy rain",
+    71: "Slight snow",
+    73: "Moderate snow",
+    75: "Heavy snow",
     77: "Snow grains",
-    80: "Slight rain showers", 81: "Moderate rain showers", 82: "Violent rain showers",
-    85: "Slight snow showers", 86: "Heavy snow showers",
-    95: "Thunderstorm", 96: "Thunderstorm with hail", 99: "Thunderstorm with heavy hail",
+    80: "Slight rain showers",
+    81: "Moderate rain showers",
+    82: "Violent rain showers",
+    85: "Slight snow showers",
+    86: "Heavy snow showers",
+    95: "Thunderstorm",
+    96: "Thunderstorm with hail",
+    99: "Thunderstorm with heavy hail",
 }
 
 
@@ -134,8 +148,7 @@ def register_weather_tools(registry: ToolRegistry) -> None:
         cur = data.get("current", {})
         cur_units = data.get("current_units", {})
         daily = data.get("daily", {})
-        wmo = int(cur.get("weather_code", 0))
-        condition = _WMO_CODES.get(wmo, f"WMO code {wmo}")
+        condition = _describe_code(cur.get("weather_code"))
 
         # Format wind direction
         wind_dir_deg = cur.get("wind_direction_10m")
@@ -168,10 +181,7 @@ def register_weather_tools(registry: ToolRegistry) -> None:
                 "sunrise": (daily.get("sunrise") or [None])[0],
                 "sunset": (daily.get("sunset") or [None])[0],
                 "precipitation_sum_mm": (daily.get("precipitation_sum") or [None])[0],
-                "weather_code": (daily.get("weather_code") or [None])[0],
-                "condition": _WMO_CODES.get(
-                    int((daily.get("weather_code") or [0])[0]), "Unknown"
-                ),
+                "condition": _describe_code((daily.get("weather_code") or [None])[0]),
             },
         }
         return ToolResult(ok=True, data=result)
@@ -194,8 +204,35 @@ def register_weather_tools(registry: ToolRegistry) -> None:
     )
 
 
+def _describe_code(code) -> str:
+    """WMO code → text; tolerates missing/None values from the API."""
+    if code is None:
+        return "Unknown"
+    try:
+        code = int(code)
+    except (TypeError, ValueError):
+        return "Unknown"
+    return _WMO_CODES.get(code, f"WMO code {code}")
+
+
 def _degrees_to_compass(degrees: float) -> str:
-    dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
-            "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+    dirs = [
+        "N",
+        "NNE",
+        "NE",
+        "ENE",
+        "E",
+        "ESE",
+        "SE",
+        "SSE",
+        "S",
+        "SSW",
+        "SW",
+        "WSW",
+        "W",
+        "WNW",
+        "NW",
+        "NNW",
+    ]
     ix = round(degrees / (360 / len(dirs))) % len(dirs)
     return dirs[ix]

@@ -66,6 +66,10 @@ class OllamaRuntimeManager:
     def base_url(self) -> str:
         return self._config.base_url
 
+    def update_config(self, config: OllamaConfig) -> None:
+        """Apply new settings without losing daemon ownership state."""
+        self._config = config
+
     async def is_daemon_up(self) -> bool:
         try:
             async with httpx.AsyncClient(timeout=2.0) as client:

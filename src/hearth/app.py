@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import signal
 import sys
 
 from PySide6.QtGui import QIcon
@@ -25,7 +26,6 @@ from .connectors.reminders import register_reminders_tools
 from .connectors.system import register_sysinfo_tools, register_system_tools
 from .connectors.utility import register_utility_tools
 from .connectors.weather import register_weather_tools
-
 from .logging_setup import setup_logging
 from .permissions import Permissions
 from .runtime.ollama_manager import OllamaRuntimeManager, RuntimeState
@@ -164,6 +164,7 @@ class HearthApp:
         self.db.set_connector_status("gmail", "revoked")
 
     def _on_settings_saved(self, config: Config) -> None:
+        self.runtime.update_config(config.ollama)
         self.provider = OllamaProvider(config.model, config.ollama)
         self.agent = AgentLoop(
             self.provider, self.registry, self.gate, max_steps=config.model.max_agent_steps
@@ -258,13 +259,17 @@ class HearthApp:
         self.window.set_status(labels.get(state, "Model: checking…"))
 
     async def startup_check(self) -> None:
-        state = await self.runtime.ensure_running()
-        if state is RuntimeState.READY and not await self.runtime.model_available(
-            self.config.model.name
-        ):
-            state = RuntimeState.MODEL_MISSING
-            self.runtime.state = state
-        self._set_status_for_state(state)
+        try:
+            state = await self.runtime.ensure_running()
+            if state is RuntimeState.READY and not await self.runtime.model_available(
+                self.config.model.name
+            ):
+                state = RuntimeState.MODEL_MISSING
+                self.runtime.state = state
+            self._set_status_for_state(state)
+        except Exception:  # noqa: BLE001 — status check must never crash startup
+            log.exception("Startup check failed")
+            self.window.set_status("Model: status unknown")
 
     def _shutdown(self) -> None:
         self.chat.cancel_open_cards()
@@ -277,6 +282,8 @@ class HearthApp:
 def main() -> None:
     setup_logging()
     app = QApplication(sys.argv)
+    signal.signal(signal.SIGINT, lambda *_: app.quit())
+    signal.signal(signal.SIGTERM, lambda *_: app.quit())
     app.setApplicationName("Hearth")
     app.setStyleSheet(STYLESHEET)
 

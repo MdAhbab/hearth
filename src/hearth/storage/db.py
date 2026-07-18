@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -79,15 +80,49 @@ MIGRATIONS: list[str] = [
 ]
 
 
+class _LockedConnection:
+    """Serializes statement execution on a connection shared across threads.
+
+    Tool handlers run in worker threads (asyncio.to_thread) while the gate
+    writes audit rows from the event-loop thread; one lock keeps every
+    statement/commit atomic regardless of the SQLite build's thread mode.
+    """
+
+    def __init__(self, conn: sqlite3.Connection):
+        self._conn = conn
+        self._lock = threading.RLock()
+
+    def execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
+        with self._lock:
+            return self._conn.execute(sql, params)
+
+    def executescript(self, script: str) -> sqlite3.Cursor:
+        with self._lock:
+            return self._conn.executescript(script)
+
+    def commit(self) -> None:
+        with self._lock:
+            self._conn.commit()
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
+
+    def set_row_factory(self, factory) -> None:
+        self._conn.row_factory = factory
+
+
 class Database:
     def __init__(self, path: Path | str | None = None):
         if path is None:
             app_data_dir().mkdir(parents=True, exist_ok=True)
             path = app_data_dir() / "hearth.db"
-        self._conn = sqlite3.connect(str(path), check_same_thread=False)
-
-        self._conn.row_factory = sqlite3.Row
+        raw = sqlite3.connect(str(path), check_same_thread=False)
+        raw.row_factory = sqlite3.Row
+        self._conn = _LockedConnection(raw)
         self._conn.execute("PRAGMA journal_mode=WAL")
+        # NORMAL is durable enough under WAL and avoids an fsync per commit.
+        self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._migrate()
 
@@ -235,22 +270,19 @@ class Database:
                 "SELECT * FROM reminders ORDER BY due_at ASC, created_at ASC"
             ).fetchall()
         return self._conn.execute(
-            "SELECT * FROM reminders WHERE completed = 0"
-            " ORDER BY due_at ASC, created_at ASC"
+            "SELECT * FROM reminders WHERE completed = 0 ORDER BY due_at ASC, created_at ASC"
         ).fetchall()
 
     def complete_reminder(self, reminder_id: int) -> bool:
         """Mark a reminder complete. Returns True if a row was updated."""
-        self._conn.execute(
+        cur = self._conn.execute(
             "UPDATE reminders SET completed = 1, completed_at = ? WHERE id = ?",
             (time.time(), reminder_id),
         )
         self._conn.commit()
-        return self._conn.execute(
-            "SELECT changes() AS n"
-        ).fetchone()["n"] > 0
+        return cur.rowcount > 0
 
     def delete_reminder(self, reminder_id: int) -> bool:
-        self._conn.execute("DELETE FROM reminders WHERE id = ?", (reminder_id,))
+        cur = self._conn.execute("DELETE FROM reminders WHERE id = ?", (reminder_id,))
         self._conn.commit()
-        return self._conn.execute("SELECT changes() AS n").fetchone()["n"] > 0
+        return cur.rowcount > 0

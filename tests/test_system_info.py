@@ -4,6 +4,7 @@ psutil calls are mocked so the tests work without real system data.
 """
 
 from __future__ import annotations
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -47,34 +48,38 @@ async def test_disk_usage_missing_path(registry):
     assert "nonexistent" in result.error
 
 
+def _mock_proc(pid: int, name: str, cpu: float, mem: float) -> MagicMock:
+    """Mock matching the two-pass sampling API (prime, wait, read)."""
+    proc = MagicMock()
+    proc.pid = pid
+    proc.info = {"pid": pid, "name": name}
+    proc.cpu_percent.return_value = cpu
+    proc.memory_percent.return_value = mem
+    return proc
+
+
 @pytest.mark.asyncio
 async def test_process_list_success(registry):
-    import psutil
-
-    mock_proc = MagicMock()
-    mock_proc.info = {"pid": 1234, "name": "python3", "cpu_percent": 12.5, "memory_percent": 1.5}
-    mock_proc2 = MagicMock()
-    mock_proc2.info = {"pid": 5678, "name": "Finder", "cpu_percent": 0.1, "memory_percent": 0.5}
-
-    with patch("psutil.process_iter", return_value=[mock_proc, mock_proc2]):
+    procs = [
+        _mock_proc(1234, "python3", 12.5, 1.5),
+        _mock_proc(5678, "Finder", 0.1, 0.5),
+    ]
+    with patch("psutil.process_iter", return_value=procs), patch("time.sleep"):
         result = await registry.get("system_running_processes").handler(
             registry.validate_args("system_running_processes", {"top_n": 5})
         )
     assert result.ok
-    procs = result.data["processes"]
+    listed = result.data["processes"]
     # Should be sorted by CPU% descending
-    assert procs[0]["name"] == "python3"
-    assert procs[0]["cpu_percent"] == 12.5
-    assert procs[1]["name"] == "Finder"
+    assert listed[0]["name"] == "python3"
+    assert listed[0]["cpu_percent"] == 12.5
+    assert listed[1]["name"] == "Finder"
 
 
 @pytest.mark.asyncio
 async def test_process_list_respects_top_n(registry):
-    procs_data = [
-        MagicMock(info={"pid": i, "name": f"proc{i}", "cpu_percent": float(i), "memory_percent": 0.0})
-        for i in range(20)
-    ]
-    with patch("psutil.process_iter", return_value=procs_data):
+    procs = [_mock_proc(i, f"proc{i}", float(i), 0.0) for i in range(20)]
+    with patch("psutil.process_iter", return_value=procs), patch("time.sleep"):
         result = await registry.get("system_running_processes").handler(
             registry.validate_args("system_running_processes", {"top_n": 3})
         )

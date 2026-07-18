@@ -15,6 +15,26 @@ from pydantic import BaseModel, Field
 from ...agent.tools import RiskLevel, ToolRegistry, ToolResult, ToolSpec
 from .roots import ApprovedRoots, PathOutsideRootsError
 
+# Directories that are never worth scanning: hidden trees plus dependency/
+# build caches that can hold hundreds of thousands of files.
+SKIP_DIRS = {"node_modules", "__pycache__", "build", "dist", "venv", "env"}
+
+
+def iter_search_files(root):
+    """Yield candidate files under root, pruning hidden and cache directories.
+
+    Uses os.walk so pruned directories are never descended into (rglob would
+    enumerate them and filter afterwards — pathologically slow on dev trees).
+    """
+    import os
+
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in SKIP_DIRS]
+        for name in filenames:
+            if not name.startswith("."):
+                yield Path(dirpath) / name
+
+
 TEXT_SUFFIXES = {
     ".txt",
     ".md",
@@ -104,20 +124,22 @@ def register_file_tools(
             needle = p.query.lower()
             hits: list[dict] = []
             for root in search_roots:
-                for path in root.rglob("*"):
+                if len(hits) >= 30:
+                    break
+                for path in iter_search_files(root):
                     if len(hits) >= 30:
                         break
-                    if path.name.startswith(".") or not path.is_file():
-                        continue
                     if needle in path.name.lower():
                         hits.append({"path": str(path), "match": "name"})
                         continue
-                    if path.suffix.lower() in TEXT_SUFFIXES and path.stat().st_size < 1_000_000:
-                        try:
-                            if needle in path.read_text(errors="ignore").lower():
-                                hits.append({"path": str(path), "match": "content"})
-                        except OSError:
-                            continue
+                    try:
+                        is_small_text = (
+                            path.suffix.lower() in TEXT_SUFFIXES and path.stat().st_size < 1_000_000
+                        )
+                        if is_small_text and needle in path.read_text(errors="ignore").lower():
+                            hits.append({"path": str(path), "match": "content"})
+                    except OSError:
+                        continue
             return ToolResult(ok=True, data={"query": p.query, "results": hits})
 
         return await asyncio.to_thread(_search)
@@ -266,9 +288,20 @@ def register_file_tools(
     # ---- Capability 1: full-text content search with line-level snippets ----
 
     class ContentSearchParams(BaseModel):
-        keyword: str = Field(min_length=1, max_length=200, description="Word or phrase to search for inside file contents")
-        folder: str = Field(default="", description="Optional subfolder to restrict the search (must be inside an approved folder)")
-        case_sensitive: bool = Field(default=False, description="Whether the search is case-sensitive")
+        keyword: str = Field(
+            min_length=1,
+            max_length=200,
+            description="Word or phrase to search for inside file contents",
+        )
+        folder: str = Field(
+            default="",
+            description=(
+                "Optional subfolder to restrict the search (must be inside an approved folder)"
+            ),
+        )
+        case_sensitive: bool = Field(
+            default=False, description="Whether the search is case-sensitive"
+        )
 
     async def search_content(p: ContentSearchParams) -> ToolResult:
         base = _guard(p.folder) if p.folder else None
@@ -281,16 +314,16 @@ def register_file_tools(
             hits: list[dict] = []
             files_scanned = 0
             for root in search_roots:
-                for path in sorted(root.rglob("*")):
+                if len(hits) >= 50:
+                    break
+                for path in iter_search_files(root):
                     if len(hits) >= 50:
                         break
-                    if path.name.startswith(".") or not path.is_file():
-                        continue
                     if path.suffix.lower() not in TEXT_SUFFIXES:
                         continue
-                    if path.stat().st_size > 2_000_000:
-                        continue  # skip very large files
                     try:
+                        if path.stat().st_size > 2_000_000:
+                            continue  # skip very large files
                         text = path.read_text(errors="ignore")
                     except OSError:
                         continue
@@ -299,11 +332,13 @@ def register_file_tools(
                     for lineno, line in enumerate(lines, start=1):
                         haystack = line if p.case_sensitive else line.lower()
                         if needle in haystack:
-                            hits.append({
-                                "file": str(path),
-                                "line": lineno,
-                                "snippet": line.strip()[:300],
-                            })
+                            hits.append(
+                                {
+                                    "file": str(path),
+                                    "line": lineno,
+                                    "snippet": line.strip()[:300],
+                                }
+                            )
                             if len(hits) >= 50:
                                 break
             return ToolResult(
@@ -334,4 +369,3 @@ def register_file_tools(
             timeout_s=90,
         )
     )
-

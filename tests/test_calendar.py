@@ -30,13 +30,13 @@ class FakeCalendarStore:
         self.events[event.id] = event
         return event
 
-    async def update_event(self, event_id, changes):
+    async def update_event(self, event_id, changes, calendar_id=None):
         event = self.events[event_id]
         for key, value in changes.items():
             setattr(event, key, value)
         return event
 
-    async def delete_event(self, event_id):
+    async def delete_event(self, event_id, calendar_id=None):
         del self.events[event_id]
 
 

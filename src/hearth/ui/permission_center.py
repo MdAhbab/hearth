@@ -90,7 +90,6 @@ class PermissionCenter(QWidget):
         self._list.addStretch(1)
         self.refresh()
 
-
     # -- Gmail ---------------------------------------------------------------
 
     def _build_gmail_card(self) -> None:
@@ -305,4 +304,3 @@ class PermissionCenter(QWidget):
         for key in ("system", "web", "shortcuts", "automation", "reminders", "weather"):
             if sync := getattr(self, f"_sync_{key}", None):
                 sync()
-

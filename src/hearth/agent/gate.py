@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..storage.db import Database
-from .tools import RiskLevel, ToolRegistry, ToolResult
+from .tools import RiskLevel, ToolRegistry, ToolResult, ToolValidationError
 
 log = logging.getLogger(__name__)
 
@@ -101,22 +101,35 @@ class ActionGate:
                 preview,
                 conversation_id,
             )
-            response = await self._request_approval(
-                ApprovalRequest(
-                    action_id=action_id,
-                    tool=tool_name,
-                    args=params.model_dump(mode="json"),
-                    preview=preview,
-                    editable=True,
+            try:
+                response = await self._request_approval(
+                    ApprovalRequest(
+                        action_id=action_id,
+                        tool=tool_name,
+                        args=params.model_dump(mode="json"),
+                        preview=preview,
+                        editable=True,
+                    )
                 )
-            )
+            except asyncio.CancelledError:
+                # Stop pressed / app quitting with the card open: close out the
+                # audit row so nothing is left 'pending' forever.
+                self._db.update_action(action_id, "cancelled")
+                raise
             if not response.approved:
                 self._db.update_action(action_id, "rejected")
                 log.info("Action %s (%s) rejected by user", action_id, tool_name)
                 return ToolResult(ok=False, error="The user rejected this action. Do not retry it.")
             if response.edited_args is not None:
                 # Re-validate anything the user changed before it can run.
-                params = self._registry.validate_args(tool_name, response.edited_args)
+                try:
+                    params = self._registry.validate_args(tool_name, response.edited_args)
+                except ToolValidationError as exc:
+                    self._db.update_action(action_id, "failed", f"invalid edit: {exc}")
+                    return ToolResult(
+                        ok=False,
+                        error=f"The edited arguments were invalid, so nothing ran: {exc}",
+                    )
         else:
             action_id = self._db.record_action(
                 tool_name,

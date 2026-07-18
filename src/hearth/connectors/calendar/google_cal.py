@@ -66,7 +66,9 @@ class GoogleCalendarStore:
 
         return await asyncio.to_thread(_run)
 
-    async def update_event(self, event_id: str, changes: dict) -> EventData:
+    async def update_event(
+        self, event_id: str, changes: dict, calendar_id: str | None = None
+    ) -> EventData:
         def _run() -> EventData:
             body: dict = {}
             if "title" in changes:
@@ -79,19 +81,22 @@ class GoogleCalendarStore:
                 body["start"] = {"dateTime": changes["start"].astimezone().isoformat()}
             if "end" in changes:
                 body["end"] = {"dateTime": changes["end"].astimezone().isoformat()}
+            cal = calendar_id or "primary"
             updated = (
                 self._service()
                 .events()
-                .patch(calendarId="primary", eventId=event_id, body=body)
+                .patch(calendarId=cal, eventId=event_id, body=body)
                 .execute()
             )
-            return _to_event_data(updated, "primary")
+            return _to_event_data(updated, cal)
 
         return await asyncio.to_thread(_run)
 
-    async def delete_event(self, event_id: str) -> None:
+    async def delete_event(self, event_id: str, calendar_id: str | None = None) -> None:
         def _run() -> None:
-            self._service().events().delete(calendarId="primary", eventId=event_id).execute()
+            self._service().events().delete(
+                calendarId=calendar_id or "primary", eventId=event_id
+            ).execute()
 
         return await asyncio.to_thread(_run)
 
