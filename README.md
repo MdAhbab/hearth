@@ -37,6 +37,7 @@ Three rules define it:
 | **Web** | Fetch a page as text (opt-in, off by default) | — |
 | **Weather** | Current conditions + today's forecast for any city (opt-in, free Open-Meteo API — no key) | — |
 | **Utilities** | Current date/time, exact arithmetic, **unit conversion (length/mass/temp/speed/area/volume/data/time)** | — |
+| **MCP servers** | — | Any tool from external MCP servers you configure (opt-in, every call confirmed) |
 
 Calendar uses native EventKit on macOS (Google calendars already synced to
 Apple Calendar just work) and the Google Calendar API on Windows/Linux.
@@ -96,8 +97,8 @@ is missing it tells you the exact `ollama pull` command instead.
    - *Calendar*: grant access (macOS shows the system Calendar prompt).
    - *Gmail*: set the credentials file in Settings first, then Connect.
    - *System / Web / Shortcuts / Browser*: enable per taste — all off by default.
-3. Chat. Try the suggestion chips: "What's on my calendar tomorrow?",
-   "Summarize my unread email", "Find a free 1-hour slot this week".
+3. Chat. Try /today for a morning brief, or the suggestion chips:
+   "What's on my calendar tomorrow?", "Find a free 1-hour slot this week".
 
 ## Configuration
 
@@ -110,6 +111,20 @@ for every option. The in-app Settings screen edits the important ones.
 Settings. For models whose template lacks native tool support, Hearth
 automatically falls back to a JSON tool-calling protocol.
 
+**Appearance:** System / Dark / Light in Settings; "System" follows the OS
+scheme live.
+
+**Skills (/commands):** type /today, /inbox, /focus, or /tidy in the chat box.
+Add your own by dropping a markdown file into the skills folder in Hearth's
+data directory — first line `# name — description`, body is the prompt
+(`{input}` receives whatever follows the command).
+
+**MCP servers:** declare external Model Context Protocol servers in
+`config.toml` under `[[mcp.servers]]`, then enable the "MCP servers"
+permission. Their tools join the registry, but every call — read or write —
+shows a confirmation card, because Hearth cannot verify what an external
+tool does.
+
 **8 GB machines:** keep `context_length` at 4096, close memory-hungry apps
 during long chats, and prefer `e2b`-class models. Hearth runs one generation at
 a time and lets Ollama unload the model after `keep_alive` (default 5 minutes).
@@ -117,7 +132,7 @@ a time and lets Ollama unload the model after `keep_alive` (default 5 minutes).
 ## Development
 
 ```bash
-./scripts/test.sh          # pytest — 90 tests, no network, no real side effects
+./scripts/test.sh          # pytest — 138 tests, no network, no real side effects
 ./scripts/format.sh        # ruff format + lint
 ./scripts/package.sh       # PyInstaller build for the current platform
 ```
@@ -143,6 +158,7 @@ flowchart LR
     Gate --> Files[Approved folders]
     Gate --> Sys[System tools]
     Gate --> Web[Web fetch opt-in]
+    Gate --> MCP[MCP servers opt-in]
     Agent --> DB[(SQLite: history + audit)]
 ```
 

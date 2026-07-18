@@ -54,6 +54,30 @@ connector, plus the safety-critical rejection paths.
       runs; an unlisted Shortcut name is refused.
 - [ ] Web access off → "read example.com" refused; enable → fetch works.
 
+## Reminders
+- [ ] Enable Reminders → "what's on my reminder list" works (macOS prompts once).
+- [ ] "Remind me to buy milk tomorrow 9am" → card shows title+due → Approve →
+      appears in Reminders app (macOS) / listed by Hearth (other OS).
+- [ ] Complete it via chat → Approve → gone from open list.
+
+## Weather
+- [ ] Weather disabled → "weather in Tokyo" politely refused.
+- [ ] Enable Weather → returns current conditions with temperature and wind.
+
+## Skills
+- [ ] "/help" (or any unknown /command) lists available commands without
+      the model loading.
+- [ ] "/today" produces a brief using only the permissions that are granted.
+- [ ] A custom skill file in the data-dir skills folder appears and expands.
+
+## MCP (if a server is configured)
+- [ ] Server tools appear only after enabling the MCP permission and restart.
+- [ ] Every MCP tool call shows a card naming the server; Reject runs nothing.
+
+## Appearance
+- [ ] Settings → Theme Light/Dark switch applies immediately; System follows
+      the OS appearance change live.
+
 ## History & persistence
 - [ ] History tab lists every action above with correct status.
 - [ ] Relaunch Hearth → approved folders, permissions, history persist;

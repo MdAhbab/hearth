@@ -56,6 +56,16 @@ Google connection there; connect Gmail first (with Calendar API enabled).
 Linux install/start a Secret Service provider (e.g. GNOME Keyring or KWallet).
 Hearth treats a locked store as "not connected" rather than crashing.
 
+## MCP servers
+
+**Configured server's tools don't appear** — check the order: server declared
+in `config.toml`, "MCP servers" permission enabled, then restart Hearth
+(servers connect at startup). The log file records handshake failures.
+
+**A server keeps timing out** — its process may be waiting for input or
+crashed; run the command from `[[mcp.servers]]` manually in a terminal and
+watch its output.
+
 ## Where things live
 
 - Config: `~/Library/Application Support/Hearth/config.toml` (macOS),

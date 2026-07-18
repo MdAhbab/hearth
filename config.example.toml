@@ -39,14 +39,26 @@ max_read_bytes = 262144    # 256 KiB cap for file reads shown to the model
 max_fetch_bytes = 500000
 fetch_timeout_s = 20.0
 
-# ── New capabilities (v0.2) ───────────────────────────────────────────────────
+[ui]
+# "system" follows the OS appearance; or force "dark" / "light".
+theme = "system"
 
-# Reminders are enabled via the Permission Center toggle.
-# On macOS they use native EventKit; on other platforms they use a local
-# SQLite table. No extra config required.
-# [reminders]  # (no options yet)
+# ── Optional capabilities ─────────────────────────────────────────────────────
 
-# Weather uses the free Open-Meteo API (no account, no API key).
-# Enable the "Weather" toggle in the Permission Center.
-# [weather]    # (no options yet)
+# Reminders: Permission Center toggle. Native EventKit on macOS, local SQLite
+# elsewhere. Weather: Permission Center toggle, free Open-Meteo API (no key).
+# Neither needs configuration here.
+
+# External MCP servers (Model Context Protocol). Declare one block per server;
+# then enable the "MCP servers" permission in the app. Every MCP tool call
+# shows a confirmation card — Hearth cannot verify what external tools do.
+#
+# [[mcp.servers]]
+# name = "filesystem"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-filesystem", "/Users/you/Sandbox"]
+
+# Custom /commands (skills): drop markdown files into <data dir>/skills/
+#   first line:  # name — description
+#   body:        the prompt template ({input} receives text after the command)
 

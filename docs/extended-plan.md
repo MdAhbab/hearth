@@ -58,20 +58,30 @@ This document records what was added, why, and what's next.
 - **No agent framework.** The loop is ~100 lines and fully scripted in tests;
   debugging beats abstraction at this scale.
 
+## Delivered after the initial build
+
+- **Reminders** — EventKit on macOS, local SQLite list elsewhere (v0.2).
+- **Weather, system info, unit conversion, content search** (v0.2).
+- **Production audit pass** — gate audit-row lifecycle under cancellation,
+  per-session EventKit access, thread-safe SQLite, search pruning, psutil
+  sampling, streaming batched rendering, capped chat memory, lazy history.
+- **Light/dark theming** with a System-following mode.
+- **MCP client** — external Model Context Protocol servers over stdio; every
+  external tool call is confirmation-gated.
+- **Skills** — built-in and user-defined /commands expanding to prompts.
+
 ## Roadmap (not in this build)
 
-1. **Reminders/Tasks** — EventKit Reminders on macOS, Google Tasks elsewhere;
-   same read-free/write-confirmed split.
-2. **Contacts lookup** — read-only contact search to help address emails
+1. **Contacts lookup** — read-only contact search to help address emails
    (macOS Contacts framework / Google People API).
-3. **Multiple conversations UI** — the schema already stores them; add a
+2. **Multiple conversations UI** — the schema already stores them; add a
    sidebar list + titles.
-4. **Scheduled digests with consent** — e.g. a morning "inbox + calendar"
+3. **Scheduled digests with consent** — e.g. a morning "inbox + calendar"
    summary the user explicitly turns on; still no autonomous writes.
-5. **Model manager** — list installed Ollama models in Settings, show RAM fit
+4. **Model manager** — list installed Ollama models in Settings, show RAM fit
    hints, offer `ollama pull` with a confirmation card.
-6. **Local RAG over approved folders** — embeddings index (all local) so
+5. **Local RAG over approved folders** — embeddings index (all local) so
    file search becomes semantic.
-7. **Voice input** — local Whisper via Ollama/whisper.cpp, push-to-talk only.
-8. **Windows/Linux CI** — GitHub Actions matrix running the (already
+6. **Voice input** — local Whisper via Ollama/whisper.cpp, push-to-talk only.
+7. **Windows/Linux CI** — GitHub Actions matrix running the (already
    platform-clean) test suite on all three OSes.

@@ -13,6 +13,9 @@ granted; writes always show a confirmation card first.
 | Shortcuts | run approved macOS Shortcuts (each run confirmed) | ✓ | — | — |
 | Browser | read active Chrome tab title/URL | ✓ (Automation prompt) | — | — |
 | Web access | fetch pages as text | ✓ | ✓ | ✓ |
+| Reminders | list; create/complete with confirmation | EventKit (native) | local list | local list |
+| Weather | current conditions via Open-Meteo (no key) | ✓ | ✓ | ✓ |
+| MCP servers | tools from configured external servers; every call confirmed | ✓ | ✓ | ✓ |
 | Core (always on) | current time, calculator | ✓ | ✓ | ✓ |
 
 ## OS-level prompts you may see
@@ -22,6 +25,7 @@ granted; writes always show a confirmation card first.
   refused it once: System Settings → Privacy & Security → Calendars → enable
   for Hearth (or the terminal/IDE you launched it from during development).
 - *Automation → Google Chrome* — appears on first use of the Chrome tab tool.
+- *Reminders* — appears the first time a reminders tool runs.
 - *Notifications* — allow if you want the notify tool to be visible.
 - Hearth does **not** request Full Disk Access or Accessibility.
 
