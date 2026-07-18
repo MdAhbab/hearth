@@ -9,7 +9,7 @@ granted; writes always show a confirmation card first.
 | Gmail | search/read; draft/send with confirmation | ✓ | ✓ | ✓ |
 | Calendar | list/find slots; mutations with confirmation | EventKit (native) | Google Calendar API | Google Calendar API |
 | Files | tools inside approved folders only | ✓ | ✓ | ✓ |
-| System | reveal file, notify, read clipboard, open app; open URL / write clipboard confirmed | ✓ | ✓ (no open-app) | ✓ (no open-app) |
+| System | reveal file, notify, read clipboard, open app; open URL / write clipboard / screenshots confirmed | ✓ | ✓ (no open-app) | ✓ (no open-app) |
 | Shortcuts | run approved macOS Shortcuts (each run confirmed) | ✓ | — | — |
 | Browser | read active Chrome tab title/URL | ✓ (Automation prompt) | — | — |
 | Web access | fetch pages as text | ✓ | ✓ | ✓ |
@@ -26,6 +26,8 @@ granted; writes always show a confirmation card first.
   for Hearth (or the terminal/IDE you launched it from during development).
 - *Automation → Google Chrome* — appears on first use of the Chrome tab tool.
 - *Reminders* — appears the first time a reminders tool runs.
+- *Screen Recording* — required for the screenshot tool; captures are
+  black until granted (System Settings → Privacy & Security).
 - *Notifications* — allow if you want the notify tool to be visible.
 - Hearth does **not** request Full Disk Access or Accessibility.
 

@@ -67,6 +67,14 @@ class ChromeTabParams(BaseModel):
     pass
 
 
+class ScreenshotParams(BaseModel):
+    pass
+
+
+# App injects this: captures the primary screen, returns base64 JPEG.
+ScreenCapture = Callable[[], str]
+
+
 async def _run(argv: list[str], timeout: float = 15) -> subprocess.CompletedProcess:
     return await asyncio.to_thread(
         subprocess.run, argv, capture_output=True, text=True, timeout=timeout
@@ -79,6 +87,7 @@ def register_system_tools(
     clipboard_set: ClipboardSet,
     notifier: Notifier,
     approved_shortcuts: Callable[[], list[tuple[str, bool]]],
+    screen_capture: ScreenCapture | None = None,
 ) -> None:
     async def open_url(p: OpenUrlParams) -> ToolResult:
         ok = await asyncio.to_thread(webbrowser.open, str(p.url))
@@ -162,6 +171,45 @@ def register_system_tools(
             preview=lambda p: f"Replace clipboard contents with:\n{p.text[:800]}",
         )
     )
+
+    if screen_capture is not None:
+
+        async def take_screenshot(_: ScreenshotParams) -> ToolResult:
+            try:
+                encoded = await asyncio.to_thread(screen_capture)
+            except Exception as exc:  # noqa: BLE001 — capture backends vary widely
+                return ToolResult(
+                    ok=False,
+                    error=(
+                        f"Screenshot failed: {exc}. On macOS, allow Screen Recording "
+                        "for Hearth in System Settings > Privacy & Security."
+                    ),
+                )
+            return ToolResult(
+                ok=True,
+                data="Screenshot captured. Describe or analyze what is on screen.",
+                image_b64=encoded,
+            )
+
+        registry.register(
+            ToolSpec(
+                name="system_screenshot",
+                description=(
+                    "Capture a screenshot of the primary screen and analyze what it "
+                    "shows. Requires approval every time — the screen may contain "
+                    "sensitive content."
+                ),
+                params_model=ScreenshotParams,
+                risk=RiskLevel.WRITE,  # screen contents are sensitive: always confirm
+                permission="system",
+                handler=take_screenshot,
+                timeout_s=20,
+                preview=lambda p: (
+                    "Capture the entire primary screen and show it to the model.\n"
+                    "Anything currently visible (messages, documents) will be included."
+                ),
+            )
+        )
 
     if sys.platform == "darwin":
         _register_macos_tools(registry, approved_shortcuts)

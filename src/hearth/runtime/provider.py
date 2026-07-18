@@ -32,6 +32,7 @@ class ChatMessage:
     content: str
     tool_calls: list[ToolCall] = field(default_factory=list)
     tool_name: str | None = None  # set on role="tool" messages
+    images: list[str] = field(default_factory=list)  # base64, vision models only
 
 
 @dataclass
@@ -121,6 +122,8 @@ class OllamaProvider:
                 ]
             if m.role == "tool" and m.tool_name:
                 entry["tool_name"] = m.tool_name
+            if m.images:
+                entry["images"] = m.images
             wire.append(entry)
         return wire
 

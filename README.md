@@ -38,6 +38,7 @@ Three rules define it:
 | **Weather** | Current conditions + today's forecast for any city (opt-in, free Open-Meteo API — no key) | — |
 | **Utilities** | Current date/time, exact arithmetic, **unit conversion (length/mass/temp/speed/area/volume/data/time)** | — |
 | **MCP servers** | — | Any tool from external MCP servers you configure (opt-in, every call confirmed) |
+| **Vision** | Attach images in chat; analyze images in approved folders | Screenshots (screen content is sensitive — confirmed every time) |
 
 Calendar uses native EventKit on macOS (Google calendars already synced to
 Apple Calendar just work) and the Google Calendar API on Windows/Linux.
@@ -114,6 +115,12 @@ automatically falls back to a JSON tool-calling protocol.
 **Appearance:** System / Dark / Light in Settings; "System" follows the OS
 scheme live.
 
+**Vision:** the default model is multimodal. Attach an image with the ＋
+button (downscaled automatically to protect 8 GB machines), ask about an image
+in an approved folder, or approve a screenshot capture and ask "what's on my
+screen?". Images stay within the current turn so the context window doesn't
+silt up.
+
 **Skills (/commands):** type /today, /inbox, /focus, or /tidy in the chat box.
 Add your own by dropping a markdown file into the skills folder in Hearth's
 data directory — first line `# name — description`, body is the prompt
@@ -132,7 +139,7 @@ a time and lets Ollama unload the model after `keep_alive` (default 5 minutes).
 ## Development
 
 ```bash
-./scripts/test.sh          # pytest — 138 tests, no network, no real side effects
+./scripts/test.sh          # pytest — 149 tests, no network, no real side effects
 ./scripts/format.sh        # ruff format + lint
 ./scripts/package.sh       # PyInstaller build for the current platform
 ```

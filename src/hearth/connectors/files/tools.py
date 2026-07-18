@@ -369,3 +369,48 @@ def register_file_tools(
             timeout_s=90,
         )
     )
+
+    # ---- Vision: let the model look at an image in an approved folder ----
+
+    class ViewImageParams(BaseModel):
+        path: str = Field(description="Path of an image file (png/jpg/webp/…) to look at")
+
+    async def view_image(p: ViewImageParams) -> ToolResult:
+        from ...images import ImageError, encode_image_file, is_image_path
+
+        target = _guard(p.path)
+        if isinstance(target, ToolResult):
+            return target
+        if not is_image_path(target):
+            return ToolResult(ok=False, error=f"Not a supported image format: {p.path}")
+
+        def _load() -> ToolResult:
+            if not target.is_file():
+                return ToolResult(ok=False, error=f"Not a file: {p.path}")
+            try:
+                encoded = encode_image_file(target)
+            except ImageError as exc:
+                return ToolResult(ok=False, error=str(exc))
+            return ToolResult(
+                ok=True,
+                data=f"Image loaded: {target.name}. Describe or analyze what you see.",
+                image_b64=encoded,
+            )
+
+        return await asyncio.to_thread(_load)
+
+    registry.register(
+        ToolSpec(
+            name="files_view_image",
+            description=(
+                "Look at an image file inside an approved folder (photo, screenshot, "
+                "diagram, scanned document) and analyze what it shows. The image is "
+                "downscaled before it reaches the model."
+            ),
+            params_model=ViewImageParams,
+            risk=RiskLevel.READ,
+            permission="files",
+            handler=view_image,
+            timeout_s=30,
+        )
+    )

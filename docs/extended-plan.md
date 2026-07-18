@@ -69,6 +69,9 @@ This document records what was added, why, and what's next.
 - **MCP client** — external Model Context Protocol servers over stdio; every
   external tool call is confirmation-gated.
 - **Skills** — built-in and user-defined /commands expanding to prompts.
+- **Vision** — chat image attachments, files_view_image for approved
+  folders, and a confirmation-gated screenshot tool; all images are
+  downscaled to a 1024-px edge before reaching the model.
 
 ## Roadmap (not in this build)
 

@@ -8,6 +8,7 @@ from collections.abc import Callable
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -52,7 +53,7 @@ class _InputBox(QPlainTextEdit):
 
 
 class ChatView(QWidget):
-    def __init__(self, on_send: Callable[[str], None], on_stop: Callable[[], None]):
+    def __init__(self, on_send: Callable[[str, list[str]], None], on_stop: Callable[[], None]):
         super().__init__()
         self._on_send = on_send
         self._on_stop = on_stop
@@ -64,6 +65,7 @@ class ChatView(QWidget):
         self._flush_timer.setInterval(80)
         self._flush_timer.timeout.connect(self._flush_stream)
         self._open_cards: list[ConfirmationCard] = []
+        self._attachments: list[str] = []
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 12, 18, 14)
@@ -109,8 +111,29 @@ class ChatView(QWidget):
         chips.addStretch(1)
         layout.addLayout(chips)
 
+        self._attach_row = QHBoxLayout()
+        self._attach_row.setSpacing(6)
+        self._attach_label = QLabel("")
+        self._attach_label.setProperty("muted", True)
+        clear_attach = QPushButton("Clear images")
+        clear_attach.setProperty("chip", True)
+        clear_attach.clicked.connect(self._clear_attachments)
+        self._attach_row.addWidget(self._attach_label, stretch=1)
+        self._attach_row.addWidget(clear_attach)
+        attach_holder = QWidget()
+        attach_holder.setLayout(self._attach_row)
+        attach_holder.hide()
+        self._attach_holder = attach_holder
+        layout.addWidget(attach_holder)
+
         input_row = QHBoxLayout()
         input_row.setSpacing(8)
+        attach = QPushButton("＋")
+        attach.setProperty("secondary", True)
+        attach.setFixedWidth(40)
+        attach.setToolTip("Attach an image for the model to look at")
+        attach.clicked.connect(self._pick_attachment)
+        input_row.addWidget(attach)
         self._input = _InputBox(self._submit)
         input_row.addWidget(self._input, stretch=1)
 
@@ -137,7 +160,33 @@ class ChatView(QWidget):
         if not text or not self._send.isEnabled():
             return
         self._input.clear()
-        self._on_send(text)
+        attachments = self._attachments
+        self._clear_attachments()
+        self._on_send(text, attachments)
+
+    # -- image attachments -------------------------------------------------
+
+    MAX_ATTACHMENTS = 3
+
+    def _pick_attachment(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Attach an image",
+            "",
+            "Images (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.tiff *.heic)",
+        )
+        if not path:
+            return
+        if len(self._attachments) >= self.MAX_ATTACHMENTS:
+            self._attachments = self._attachments[1:]
+        self._attachments.append(path)
+        names = ", ".join(p.rsplit("/", 1)[-1] for p in self._attachments)
+        self._attach_label.setText(f"Attached: {names}")
+        self._attach_holder.show()
+
+    def _clear_attachments(self) -> None:
+        self._attachments = []
+        self._attach_holder.hide()
 
     def set_busy(self, busy: bool) -> None:
         self._send.setEnabled(not busy)

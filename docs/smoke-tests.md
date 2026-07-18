@@ -78,6 +78,15 @@ connector, plus the safety-critical rejection paths.
 - [ ] Settings → Theme Light/Dark switch applies immediately; System follows
       the OS appearance change live.
 
+## Vision
+- [ ] Attach a photo with ＋ and ask "what is this?" → sensible description.
+- [ ] "Look at <image in approved folder> and describe it" → uses
+      files_view_image, describes correctly; an image outside approved
+      folders is refused.
+- [ ] "What's on my screen?" → confirmation card warns about screen content;
+      Approve → capture analyzed (grant Screen Recording once on macOS);
+      Reject → nothing captured.
+
 ## History & persistence
 - [ ] History tab lists every action above with correct status.
 - [ ] Relaunch Hearth → approved folders, permissions, history persist;

@@ -27,6 +27,8 @@ class ToolResult:
     ok: bool
     data: Any = None
     error: str = ""
+    # base64 image for the model to *see* (vision models); empty otherwise.
+    image_b64: str = ""
 
     def for_model(self) -> str:
         if not self.ok:

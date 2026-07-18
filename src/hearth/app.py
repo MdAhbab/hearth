@@ -142,6 +142,7 @@ class HearthApp:
             clipboard_set=lambda text: self._qt.clipboard().setText(text),
             notifier=self._notify,
             approved_shortcuts=self.db.list_approved_shortcuts,
+            screen_capture=self._capture_screen,
         )
         register_sysinfo_tools(self.registry)
         register_reminders_tools(self.registry, self.db)
@@ -150,6 +151,19 @@ class HearthApp:
 
     def _notify(self, title: str, message: str) -> None:
         self._tray.showMessage(title, message)
+
+    def _capture_screen(self) -> str:
+        from .images import ImageError, encode_qimage
+
+        screen = self._qt.primaryScreen()
+        if screen is None:
+            raise ImageError("No screen available")
+        pixmap = screen.grabWindow(0)
+        if pixmap.isNull():
+            raise ImageError(
+                "Capture returned an empty image (missing Screen Recording permission?)"
+            )
+        return encode_qimage(pixmap.toImage())
 
     # -- approval bridge -----------------------------------------------------
 
@@ -187,9 +201,17 @@ class HearthApp:
 
     # -- chat flow -----------------------------------------------------------------
 
-    def _on_send(self, text: str) -> None:
+    def _on_send(self, text: str, image_paths: list[str] | None = None) -> None:
         if self._active_task and not self._active_task.done():
             return
+        images: list[str] = []
+        for path in image_paths or []:
+            try:
+                from .images import encode_image_file
+
+                images.append(encode_image_file(path))
+            except Exception as exc:  # noqa: BLE001 — a bad file shouldn't block the send
+                self.chat.add_tool_note(f"Could not attach {path}: {exc}")
         model_text = text
         if text.startswith("/"):
             expanded = self.skills.expand(text)
@@ -199,16 +221,22 @@ class HearthApp:
                 self.chat.add_assistant_message(self.skills.help_text())
                 return
             model_text = expanded
-        self.chat.add_user_message(text)
+        self.chat.add_user_message(
+            text + (f"\n[{len(images)} image(s) attached]" if images else "")
+        )
         self.chat.set_busy(True)
-        self._active_task = asyncio.ensure_future(self._run_turn(model_text, display_text=text))
+        self._active_task = asyncio.ensure_future(
+            self._run_turn(model_text, display_text=text, images=images)
+        )
 
     def _on_stop(self) -> None:
         if self._active_task and not self._active_task.done():
             self._active_task.cancel()
         self.chat.cancel_open_cards()
 
-    async def _run_turn(self, text: str, display_text: str | None = None) -> None:
+    async def _run_turn(
+        self, text: str, display_text: str | None = None, images: list[str] | None = None
+    ) -> None:
         display_text = display_text if display_text is not None else text
         try:
             state = await self.runtime.ensure_running()
@@ -240,11 +268,12 @@ class HearthApp:
 
             async with self.runtime.generation_lock:
                 answer = await self.agent.run(
-                    list(self._history), text, on_event, self.conversation_id
+                    list(self._history), text, on_event, self.conversation_id, images=images
                 )
 
             self.chat.end_stream(answer)
-            self._history.append(ChatMessage("user", text))
+            history_text = text + ("\n[an image was attached earlier]" if images else "")
+            self._history.append(ChatMessage("user", history_text))
             self._history.append(ChatMessage("assistant", answer))
             self._history[:] = self._history[-MAX_HISTORY_MESSAGES:]
             self.db.add_message(self.conversation_id, "user", display_text)
