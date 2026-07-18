@@ -125,11 +125,15 @@ class Config(BaseModel):
                     escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
                     lines.append(f'{key} = "{escaped}"')
             lines.append("")
+
+        def quote(value: str) -> str:
+            return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
         for server in self.mcp.servers:
             lines.append("[[mcp.servers]]")
-            lines.append(f'name = "{server.name}"')
-            lines.append(f'command = "{server.command}"')
-            args = ", ".join(f'"{a}"' for a in server.args)
+            lines.append(f"name = {quote(server.name)}")
+            lines.append(f"command = {quote(server.command)}")
+            args = ", ".join(quote(a) for a in server.args)
             lines.append(f"args = [{args}]")
             lines.append("")
         path.write_text("\n".join(lines), encoding="utf-8")

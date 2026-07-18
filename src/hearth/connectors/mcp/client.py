@@ -108,9 +108,11 @@ class MCPServerConnection:
         await self._send({"jsonrpc": "2.0", "method": method, "params": params})
 
     async def _send(self, message: dict[str, Any]) -> None:
-        assert self._process and self._process.stdin
-        self._process.stdin.write((json.dumps(message) + "\n").encode())
-        await self._process.stdin.drain()
+        process = self._process
+        if process is None or process.stdin is None:
+            raise MCPError(f"MCP server '{self.name}' is not running")
+        process.stdin.write((json.dumps(message) + "\n").encode())
+        await process.stdin.drain()
 
     async def _read_loop(self) -> None:
         assert self._process and self._process.stdout
@@ -133,6 +135,10 @@ class MCPServerConnection:
                     future.set_exception(MCPError(f"MCP server '{self.name}' disconnected"))
 
     def _dispatch(self, message: dict[str, Any]) -> None:
+        if "method" in message:
+            # Server-initiated request or notification — nothing we support;
+            # never confuse its id with one of our pending response ids.
+            return
         request_id = message.get("id")
         future = self._pending.get(request_id) if request_id is not None else None
         if future is None or future.done():

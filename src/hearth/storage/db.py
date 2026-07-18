@@ -108,9 +108,6 @@ class _LockedConnection:
         with self._lock:
             self._conn.close()
 
-    def set_row_factory(self, factory) -> None:
-        self._conn.row_factory = factory
-
 
 class Database:
     def __init__(self, path: Path | str | None = None):
