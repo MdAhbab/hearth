@@ -31,6 +31,7 @@ from .logging_setup import setup_logging
 from .permissions import Permissions
 from .runtime.ollama_manager import OllamaRuntimeManager, RuntimeState
 from .runtime.provider import ChatMessage, OllamaProvider
+from .skills import SkillLibrary
 from .storage.db import Database
 from .storage.keychain import KeychainSecretStore
 from .ui.chat_view import ChatView
@@ -108,6 +109,7 @@ class HearthApp:
             max_steps=self.config.model.max_agent_steps,
         )
 
+        self.skills = SkillLibrary()
         self.conversation_id = self.db.create_conversation()
         self._history: list[ChatMessage] = []
         self._active_task: asyncio.Task | None = None
@@ -188,16 +190,26 @@ class HearthApp:
     def _on_send(self, text: str) -> None:
         if self._active_task and not self._active_task.done():
             return
+        model_text = text
+        if text.startswith("/"):
+            expanded = self.skills.expand(text)
+            if expanded is None:
+                # Unknown command: answer locally, never wake the model.
+                self.chat.add_user_message(text)
+                self.chat.add_assistant_message(self.skills.help_text())
+                return
+            model_text = expanded
         self.chat.add_user_message(text)
         self.chat.set_busy(True)
-        self._active_task = asyncio.ensure_future(self._run_turn(text))
+        self._active_task = asyncio.ensure_future(self._run_turn(model_text, display_text=text))
 
     def _on_stop(self) -> None:
         if self._active_task and not self._active_task.done():
             self._active_task.cancel()
         self.chat.cancel_open_cards()
 
-    async def _run_turn(self, text: str) -> None:
+    async def _run_turn(self, text: str, display_text: str | None = None) -> None:
+        display_text = display_text if display_text is not None else text
         try:
             state = await self.runtime.ensure_running()
             if state is not RuntimeState.READY:
@@ -235,7 +247,7 @@ class HearthApp:
             self._history.append(ChatMessage("user", text))
             self._history.append(ChatMessage("assistant", answer))
             self._history[:] = self._history[-MAX_HISTORY_MESSAGES:]
-            self.db.add_message(self.conversation_id, "user", text)
+            self.db.add_message(self.conversation_id, "user", display_text)
             self.db.add_message(self.conversation_id, "assistant", answer)
             self.window.set_status(f"Model: {self.config.model.name} — ready")
         except asyncio.CancelledError:

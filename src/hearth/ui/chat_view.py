@@ -22,6 +22,7 @@ from ..agent.gate import ApprovalRequest
 from .confirmation_card import ConfirmationCard
 
 SUGGESTIONS = [
+    "/today",
     "Summarize my unread email",
     "What's on my calendar tomorrow?",
     "Find a free 1-hour slot this week",
@@ -88,7 +89,8 @@ class ChatView(QWidget):
         greeting.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sub = QLabel(
             "Everything runs on this machine. Grant what you want in Permissions,\n"
-            "then ask below — anything that changes data will ask you first."
+            "then ask below — anything that changes data will ask you first.\n"
+            "Try /today for a morning brief, or /help to list commands."
         )
         sub.setProperty("muted", True)
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
