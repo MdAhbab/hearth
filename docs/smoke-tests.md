@@ -10,10 +10,16 @@ connector, plus the safety-critical rejection paths.
       manually starting Ollama.
 - [ ] Quit Hearth → `pgrep ollama` shows the daemon is gone **only if** Hearth
       started it (leave it running beforehand to check the inverse).
-- [ ] Set a bogus model name in Settings → send a message → clear "model isn't
-      installed" reply naming the `ollama pull` command; no crash.
+- [ ] Set a bogus model name in Settings (Custom local model…) → send a
+      message → clear "model isn't installed" reply naming the `ollama pull`
+      command; no crash.
+- [ ] Settings model picker lists every `ollama list` model with sizes;
+      Refresh picks up a newly pulled model without restarting.
+- [ ] Store a cloud API key → its model appears in the picker; select it →
+      status pill shows the provider "(cloud)", chat announces it once, and
+      answers stream. Switch back to a local model → label reverts.
 - [ ] Press **Stop** mid-generation → streaming halts, "Stopped." note, app
-      stays responsive.
+      stays responsive; the button reads Send again.
 
 ## Chat & agent
 - [ ] "What time is it?" → uses time_now, correct local time.

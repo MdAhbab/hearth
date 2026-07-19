@@ -10,8 +10,9 @@
   A custom location works as long as it's on PATH.
 
 **"The model 'X' isn't installed"**
-- `ollama list` shows what you have; `ollama pull gemma4:e2b` fetches the
-  default. Hearth never pulls models itself.
+- Open Settings — the model picker lists everything Ollama has on this
+  machine; pick one of those. `ollama pull gemma4:e2b` fetches the default
+  if the list is empty. Hearth never pulls models itself.
 
 **First reply is very slow**
 - That's the model loading into memory (once per `keep_alive` window). On an

@@ -12,8 +12,9 @@ Three rules define it:
 1. **Local by default.** The model runs on your machine. Conversations, action
    history, and settings live in a local SQLite database. The only network
    traffic is to services you explicitly connect (Gmail/Google Calendar), fetch
-   (opt-in web access), or the opt-in cloud fallback — off by default, used only
-   when the local model is down, and labeled in the chat every time.
+   (opt-in web access), or a cloud model you explicitly opt into — either as a
+   fallback when the local model is down (labeled in chat every time) or by
+   picking one in Settings (labeled in the status bar). Off by default.
 2. **Nothing changes without your OK.** Reads run automatically once you grant
    a permission. Every create, send, update, move, rename, or delete shows an
    exact preview card — Approve / Edit / Reject — before anything happens.
@@ -32,7 +33,7 @@ Three rules define it:
 | **Gmail** | Search mail, read messages, summarize threads | Create drafts, send email |
 | **Calendar** | List calendars/events, find free slots | Create, update, delete events |
 | **Files** | List, search, read text files in approved folders; **search file contents with line-level snippets** | Create, move/rename, delete (→ Trash) |
-| **System** | Reveal files, notifications, read clipboard, open apps (macOS), **disk usage**, **top processes** | Open URLs, write clipboard, run approved macOS Shortcuts |
+| **System** | Reveal files, notifications, read clipboard, open apps (macOS by name/bundle id, Windows via Start Menu), **disk usage**, **top processes** | Open URLs, write clipboard, run approved macOS Shortcuts |
 | **Reminders** | List open reminders (native EventKit on macOS, local on others) | Create, complete reminders |
 | **Browser** | Read active Chrome tab title/URL (macOS, opt-in) | — |
 | **Web** | Fetch a page as text (opt-in, off by default) | — |
@@ -42,7 +43,7 @@ Three rules define it:
 | **Vision** | Attach images in chat; analyze images in approved folders | Screenshots (screen content is sensitive — confirmed every time) |
 | **Attachments** | Attach PDFs, Word documents, and text/code files in chat for the model to read | — |
 | **Voice** | Click the mic, speak, and a local Whisper model types the transcript for you (audio never leaves the machine) | — |
-| **Cloud fallback** | Opt-in: if the local model is down, answer via Gemini / OpenAI / DeepSeek / NVIDIA — always labeled in chat | — |
+| **Cloud models** | Opt-in, two ways: automatic fallback when the local model is down (labeled in chat every time), or explicitly picking a Gemini / OpenAI / DeepSeek / NVIDIA model in Settings (labeled in the status bar and announced in chat) | — |
 
 Calendar uses native EventKit on macOS (Google calendars already synced to
 Apple Calendar just work) and the Google Calendar API on Windows/Linux.
@@ -57,9 +58,9 @@ used), background monitoring, or autonomous scheduled actions.
 
 | What | Where | Needed for |
 |---|---|---|
-| **Python 3.11 or 3.12** | [python.org](https://www.python.org/downloads/) or `brew install python@3.11` | Running from source |
+| **Python 3.11–3.13** | [python.org](https://www.python.org/downloads/) or `brew install python@3.12` | Running from source |
 | **Ollama** | [ollama.com/download](https://ollama.com/download) (macOS/Windows/Linux) | The local model runtime |
-| **A model** | `ollama pull gemma4:e2b` (≈7 GB, fits 8 GB RAM) | The brain. Use `gemma4:e4b` on 16 GB+ |
+| **A model** | `ollama pull gemma4:e2b` (≈7 GB, fits 8 GB RAM) | The brain. Use `gemma4:e4b` on 16 GB+. Any tool-capable model works — Settings lists whatever is installed |
 | **Google OAuth credentials JSON** *(optional)* | Google Cloud Console — see [docs/google-oauth.md](docs/google-oauth.md) | Only for Gmail (and Google Calendar on Windows/Linux) |
 
 Everything else is installed by `pip` in the steps below.
@@ -97,7 +98,9 @@ is missing it tells you the exact `ollama pull` command instead.
 
 ### First-run checklist
 
-1. Open **Settings** → confirm the model name (`gemma4:e2b` by default).
+1. Open **Settings** → pick a model. The dropdown lists every model installed
+   in Ollama on this machine (with sizes); cloud models appear once you save
+   an API key. Add your name under *Personal* if you want a personal touch.
 2. Open **Permissions** → enable what you want Hearth to touch:
    - *Files*: add one or more approved folders.
    - *Calendar*: grant access (macOS shows the system Calendar prompt).
@@ -113,9 +116,18 @@ Settings live in a per-user `config.toml`
 Linux: `~/.local/share/Hearth/`). See [config.example.toml](config.example.toml)
 for every option. The in-app Settings screen edits the important ones.
 
-**Switching models:** pull any tool-capable Ollama model and set its name in
-Settings. For models whose template lacks native tool support, Hearth
-automatically falls back to a JSON tool-calling protocol.
+**Switching models:** Settings shows a picker of every model installed in
+Ollama (refreshed live, with sizes) plus cloud models for any provider whose
+API key you've stored. Pull any tool-capable Ollama model and hit Refresh;
+for models whose template lacks native tool support, Hearth automatically
+falls back to a JSON tool-calling protocol. Picking a cloud model makes it
+the primary — the status bar labels it, the chat announces it, and switching
+back to local is one click.
+
+**Personalization:** the optional *Personal* card in Settings (your name, a
+line about you) shapes the greeting and the system prompt. It lives in your
+local config file and is shared with nothing except the model answering the
+chat.
 
 **Appearance:** System / Dark / Light in Settings; "System" follows the OS
 scheme live.
@@ -140,14 +152,15 @@ device. The optional packages install via `pip install "hearth[voice]"`
 (run.py attempts this automatically), and the ~75 MB speech model downloads
 once, only after you agree in the app.
 
-**Cloud fallback (optional):** off by default. If you enable it in Settings
-and store an API key for Google Gemini, OpenAI, DeepSeek, or NVIDIA (keys go
-to the OS keychain, never files), Hearth will answer through the first
+**Cloud models (optional):** off by default. Store an API key for Google
+Gemini, OpenAI, DeepSeek, or NVIDIA in Settings (keys go to the OS keychain,
+never files) and it unlocks two things. First, that provider's model appears
+in the model picker — choose it and it becomes the primary, clearly labeled.
+Second, if you also enable fallback, Hearth answers through the first
 configured provider **only when the local model is unreachable** — Ollama not
-installed yet, the model still downloading, or a mid-request failure. Every
-cloud-answered turn is labeled in the chat, tool confirmations work exactly
-the same, and Gemini/OpenAI can even handle image attachments while filling
-in.
+installed yet, the model still downloading, or a mid-request failure — and
+labels every such turn in the chat. Tool confirmations work exactly the same
+either way, and Gemini/OpenAI can even handle image attachments.
 
 **Skills (/commands):** type /today, /inbox, /focus, or /tidy in the chat box.
 Add your own by dropping a markdown file into the skills folder in Hearth's
@@ -167,7 +180,7 @@ a time and lets Ollama unload the model after `keep_alive` (default 5 minutes).
 ## Development
 
 ```bash
-./scripts/test.sh          # pytest — 178 tests, no network, no real side effects
+./scripts/test.sh          # pytest — 224 tests, no network, no real side effects
 ./scripts/format.sh        # ruff format + lint
 ./scripts/package.sh       # PyInstaller build for the current platform
 ```
@@ -186,7 +199,7 @@ build on the platform you're shipping for.
 flowchart LR
     User --> UI[PySide6 UI]
     UI --> Agent[Agent loop]
-    Agent --> Provider[Ollama + local model]
+    Agent --> Provider[Ollama local model — or a cloud model you pick]
     Agent --> Gate[ActionGate: validate args, check permission, confirm writes]
     Gate --> Gmail[Gmail]
     Gate --> Cal[Calendar: EventKit or Google]

@@ -9,7 +9,7 @@ granted; writes always show a confirmation card first.
 | Gmail | search/read; draft/send with confirmation | ✓ | ✓ | ✓ |
 | Calendar | list/find slots; mutations with confirmation | EventKit (native) | Google Calendar API | Google Calendar API |
 | Files | tools inside approved folders only | ✓ | ✓ | ✓ |
-| System | reveal file, notify, read clipboard, open app; open URL / write clipboard / screenshots confirmed | ✓ | ✓ (no open-app) | ✓ (no open-app) |
+| System | reveal file, notify, read clipboard, open app; open URL / write clipboard / screenshots confirmed | ✓ | ✓ (open-app matches Start Menu shortcuts) | ✓ (no open-app) |
 | Shortcuts | run approved macOS Shortcuts (each run confirmed) | ✓ | — | — |
 | Browser | read active Chrome tab title/URL | ✓ (Automation prompt) | — | — |
 | Web access | fetch pages as text | ✓ | ✓ | ✓ |

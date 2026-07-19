@@ -87,6 +87,38 @@ This document records what was added, why, and what's next.
   emitting output is skipped, one that fails mid-stream is not retried to
   avoid duplicated text.
 
+## Production-readiness pass (this build)
+
+- **Python 3.13 support** — `run.py` and the pins now accept 3.11–3.13
+  (PySide6 ≥ 6.8, PyInstaller ≥ 6.10), so machines with only the current
+  Python work out of the box.
+- **Model picker** — Settings lists installed Ollama models live (with sizes
+  and a machine-RAM hint) plus one entry per cloud provider with a stored
+  key. `[model] provider` selects "ollama" or a cloud id; a cloud primary is
+  labeled in the status bar and announced in chat. Roadmap item "Model
+  manager" is delivered except `ollama pull` (still deliberate: Hearth never
+  downloads models).
+- **Markdown rendering** — assistant bubbles render bold/lists/code/links via
+  a ~140-line escape-first converter (`ui/markdown.py`); model text can never
+  inject markup.
+- **Personalization** — optional `[user] name/about` feeds the greeting and
+  system prompt; the prompt is also platform-aware now (no more "your Mac" on
+  Windows).
+- **Windows open-app** — `system_open_app` on Windows matches Start Menu
+  shortcuts by name (only installed apps; never a shell string).
+- **UI polish** — a flame logo drawn with QPainter is the single brand mark
+  (app/taskbar/tray icon, sidebar, welcome hero); the conversation is a
+  centered width-capped column where the assistant answers as open text and
+  the user speaks in compact warm bubbles that hug their content; welcome
+  empty state with time-of-day greeting and starter chips (the permanent
+  chip row is gone); Send↔Stop morphing button; scroll anchoring that
+  respects reading position; thin scrollbars; composer focus ring;
+  palette-correct error text in light mode; History empty state; minimum
+  window size; accessible names on icon-only buttons.
+- **Reliability** — attachments (PDF extraction, image encode) moved off the
+  UI thread; DB guards against writes-after-close during shutdown; SQLite
+  indexes for messages/actions/reminders; `/api/tags` result cached ~30 s.
+
 ## Roadmap (not in this build)
 
 1. **Contacts lookup** — read-only contact search to help address emails
@@ -95,8 +127,8 @@ This document records what was added, why, and what's next.
    sidebar list + titles.
 3. **Scheduled digests with consent** — e.g. a morning "inbox + calendar"
    summary the user explicitly turns on; still no autonomous writes.
-4. **Model manager** — list installed Ollama models in Settings, show RAM fit
-   hints, offer `ollama pull` with a confirmation card.
+4. **`ollama pull` with a confirmation card** — the picker exists; downloads
+   stay manual for now.
 5. **Local RAG over approved folders** — embeddings index (all local) so
    file search becomes semantic.
 6. **Windows/Linux CI** — GitHub Actions matrix running the (already
