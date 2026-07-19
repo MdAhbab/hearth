@@ -39,6 +39,18 @@ max_read_bytes = 262144    # 256 KiB cap for file reads shown to the model
 max_fetch_bytes = 500000
 fetch_timeout_s = 20.0
 
+[fallback]
+# Opt-in cloud fallback: used ONLY when the local model is unreachable, and
+# every cloud-answered turn is labeled in the chat. API keys are entered in
+# Settings and stored in the OS credential store — never in this file.
+# `order` is the priority order; providers without a stored key are skipped.
+enabled = false
+order = ["gemini", "openai", "deepseek", "nvidia"]
+gemini_model = "gemini-2.5-flash"
+openai_model = "gpt-4o-mini"
+deepseek_model = "deepseek-chat"
+nvidia_model = "nvidia/llama-3.1-nemotron-70b-instruct"
+
 [ui]
 # "system" follows the OS appearance; or force "dark" / "light".
 theme = "system"
@@ -61,4 +73,9 @@ theme = "system"
 # Custom /commands (skills): drop markdown files into <data dir>/skills/
 #   first line:  # name — description
 #   body:        the prompt template ({input} receives text after the command)
+
+# Voice input: needs the optional packages (pip install "hearth[voice]" —
+# run.py tries this automatically). The Whisper speech model (~75 MB) is
+# downloaded once, only after you agree in the app; transcription always
+# runs locally. Model files live in <data dir>/voice-models/.
 

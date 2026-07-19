@@ -72,6 +72,20 @@ This document records what was added, why, and what's next.
 - **Vision** — chat image attachments, files_view_image for approved
   folders, and a confirmation-gated screenshot tool; all images are
   downscaled to a 1024-px edge before reaching the model.
+- **Document attachments** — PDFs (pypdf), DOCX (stdlib zip+XML), and
+  text/code files attach in chat; text is extracted locally, capped to fit
+  the context, and framed as quoted data like tool results.
+- **Voice input** — push-to-talk mic button; faster-whisper (int8, CPU)
+  transcribes locally into the input box for review before sending. Optional
+  `hearth[voice]` extra; the ~75 MB model downloads only with explicit
+  consent. (Ollama's API takes text+images only, so audio cannot go to the
+  chat model directly — local transcription is the honest architecture.)
+- **Cloud fallback** — opt-in chain over the OpenAI-compatible APIs of
+  Gemini, OpenAI, DeepSeek, and NVIDIA. Used only when the local model is
+  unreachable (including mid-request failure, retried once); keys in the OS
+  keychain; every cloud turn labeled in chat; a provider that fails before
+  emitting output is skipped, one that fails mid-stream is not retried to
+  avoid duplicated text.
 
 ## Roadmap (not in this build)
 
@@ -85,6 +99,5 @@ This document records what was added, why, and what's next.
    hints, offer `ollama pull` with a confirmation card.
 5. **Local RAG over approved folders** — embeddings index (all local) so
    file search becomes semantic.
-6. **Voice input** — local Whisper via Ollama/whisper.cpp, push-to-talk only.
-7. **Windows/Linux CI** — GitHub Actions matrix running the (already
+6. **Windows/Linux CI** — GitHub Actions matrix running the (already
    platform-clean) test suite on all three OSes.

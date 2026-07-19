@@ -87,6 +87,31 @@ connector, plus the safety-critical rejection paths.
       Approve → capture analyzed (grant Screen Recording once on macOS);
       Reject → nothing captured.
 
+## Document attachments
+- [ ] ＋ → attach a PDF, ask "summarize this" → summary reflects the PDF.
+- [ ] Attach a .docx and a .txt → both readable; a follow-up question in the
+      next turn does not re-send the document (check it answers from memory
+      of the summary, not fresh content).
+- [ ] Attach an unsupported file (e.g. .zip) → friendly note, send not blocked.
+
+## Voice input
+- [ ] First click of 🎤 without the voice packages → install hint, no crash.
+- [ ] With packages: first use asks consent before downloading the speech
+      model; declining downloads nothing.
+- [ ] Record "what time is it" → transcript appears in the input box for
+      review (nothing auto-sends); macOS shows the Microphone prompt once.
+- [ ] Click 🎤 then ■ immediately → "too short" note, app stays usable.
+
+## Cloud fallback
+- [ ] With fallback disabled and Ollama stopped+autostart off → the usual
+      local-model guidance appears, no network calls.
+- [ ] Enable fallback, save a key in Settings → key is NOT in config.toml;
+      placeholder shows "saved in keychain".
+- [ ] Stop Ollama (autostart off) and send a message → chat notes the labeled
+      fallback ("falling back to … (cloud)") and answers; status bar shows the
+      cloud model name.
+- [ ] Restart Ollama → next turn uses the local model again with no note.
+
 ## History & persistence
 - [ ] History tab lists every action above with correct status.
 - [ ] Relaunch Hearth → approved folders, permissions, history persist;

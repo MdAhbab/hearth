@@ -28,6 +28,8 @@ granted; writes always show a confirmation card first.
 - *Reminders* — appears the first time a reminders tool runs.
 - *Screen Recording* — required for the screenshot tool; captures are
   black until granted (System Settings → Privacy & Security).
+- *Microphone* — appears the first time you use the voice-input button.
+  Recording and transcription both run locally; audio never leaves the Mac.
 - *Notifications* — allow if you want the notify tool to be visible.
 - Hearth does **not** request Full Disk Access or Accessibility.
 

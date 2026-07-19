@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
@@ -53,10 +54,16 @@ class _InputBox(QPlainTextEdit):
 
 
 class ChatView(QWidget):
-    def __init__(self, on_send: Callable[[str, list[str]], None], on_stop: Callable[[], None]):
+    def __init__(
+        self,
+        on_send: Callable[[str, list[str]], None],
+        on_stop: Callable[[], None],
+        on_voice: Callable[[], None] | None = None,
+    ):
         super().__init__()
         self._on_send = on_send
         self._on_stop = on_stop
+        self._on_voice = on_voice
         self._streaming_label: QLabel | None = None
         self._streaming_text = ""
         self._pending_text = ""
@@ -115,7 +122,7 @@ class ChatView(QWidget):
         self._attach_row.setSpacing(6)
         self._attach_label = QLabel("")
         self._attach_label.setProperty("muted", True)
-        clear_attach = QPushButton("Clear images")
+        clear_attach = QPushButton("Clear attachments")
         clear_attach.setProperty("chip", True)
         clear_attach.clicked.connect(self._clear_attachments)
         self._attach_row.addWidget(self._attach_label, stretch=1)
@@ -131,9 +138,18 @@ class ChatView(QWidget):
         attach = QPushButton("＋")
         attach.setProperty("secondary", True)
         attach.setFixedWidth(40)
-        attach.setToolTip("Attach an image for the model to look at")
+        attach.setToolTip("Attach an image or document (PDF, DOCX, text)")
         attach.clicked.connect(self._pick_attachment)
         input_row.addWidget(attach)
+        self._mic = QPushButton("🎤")
+        self._mic.setProperty("secondary", True)
+        self._mic.setFixedWidth(40)
+        self._mic.setToolTip("Voice input — click to record, click again to transcribe")
+        if on_voice is not None:
+            self._mic.clicked.connect(on_voice)
+        else:
+            self._mic.hide()
+        input_row.addWidget(self._mic)
         self._input = _InputBox(self._submit)
         input_row.addWidget(self._input, stretch=1)
 
@@ -164,29 +180,55 @@ class ChatView(QWidget):
         self._clear_attachments()
         self._on_send(text, attachments)
 
-    # -- image attachments -------------------------------------------------
+    # -- attachments (images and documents) ---------------------------------
 
     MAX_ATTACHMENTS = 3
 
+    _FILE_FILTER = (
+        "Images and documents (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.tiff *.heic "
+        "*.pdf *.docx *.txt *.md *.csv *.tsv *.json *.log *.yaml *.yml *.toml *.xml "
+        "*.html *.htm *.ini *.cfg *.py *.js *.ts *.sh *.rst *.markdown);;All files (*)"
+    )
+
     def _pick_attachment(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Attach an image",
-            "",
-            "Images (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.tiff *.heic)",
-        )
+        path, _ = QFileDialog.getOpenFileName(self, "Attach a file", "", self._FILE_FILTER)
         if not path:
             return
         if len(self._attachments) >= self.MAX_ATTACHMENTS:
             self._attachments = self._attachments[1:]
         self._attachments.append(path)
-        names = ", ".join(p.rsplit("/", 1)[-1] for p in self._attachments)
+        names = ", ".join(Path(p).name for p in self._attachments)
         self._attach_label.setText(f"Attached: {names}")
         self._attach_holder.show()
 
     def _clear_attachments(self) -> None:
         self._attachments = []
         self._attach_holder.hide()
+
+    # -- voice input ---------------------------------------------------------
+
+    def set_voice_state(self, state: str) -> None:
+        """states: idle | recording | busy"""
+        recording = state == "recording"
+        self._mic.setText("■" if recording else "…" if state == "busy" else "🎤")
+        self._mic.setEnabled(state != "busy")
+        self._mic.setProperty("voiceRecording", recording)
+        style = self._mic.style()
+        style.unpolish(self._mic)
+        style.polish(self._mic)
+        if recording:
+            self._attach_label.setText("Recording — click ■ to stop and transcribe")
+            self._attach_holder.show()
+        elif not self._attachments:
+            self._attach_holder.hide()
+
+    def insert_transcript(self, text: str) -> None:
+        existing = self._input.toPlainText()
+        self._input.setPlainText((existing + " " + text).strip() if existing else text)
+        cursor = self._input.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self._input.setTextCursor(cursor)
+        self._input.setFocus()
 
     def set_busy(self, busy: bool) -> None:
         self._send.setEnabled(not busy)

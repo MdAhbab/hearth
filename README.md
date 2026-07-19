@@ -11,8 +11,9 @@ Three rules define it:
 
 1. **Local by default.** The model runs on your machine. Conversations, action
    history, and settings live in a local SQLite database. The only network
-   traffic is to services you explicitly connect (Gmail/Google Calendar) or
-   fetch (opt-in web access).
+   traffic is to services you explicitly connect (Gmail/Google Calendar), fetch
+   (opt-in web access), or the opt-in cloud fallback — off by default, used only
+   when the local model is down, and labeled in the chat every time.
 2. **Nothing changes without your OK.** Reads run automatically once you grant
    a permission. Every create, send, update, move, rename, or delete shows an
    exact preview card — Approve / Edit / Reject — before anything happens.
@@ -39,13 +40,17 @@ Three rules define it:
 | **Utilities** | Current date/time, exact arithmetic, **unit conversion (length/mass/temp/speed/area/volume/data/time)** | — |
 | **MCP servers** | — | Any tool from external MCP servers you configure (opt-in, every call confirmed) |
 | **Vision** | Attach images in chat; analyze images in approved folders | Screenshots (screen content is sensitive — confirmed every time) |
+| **Attachments** | Attach PDFs, Word documents, and text/code files in chat for the model to read | — |
+| **Voice** | Click the mic, speak, and a local Whisper model types the transcript for you (audio never leaves the machine) | — |
+| **Cloud fallback** | Opt-in: if the local model is down, answer via Gemini / OpenAI / DeepSeek / NVIDIA — always labeled in chat | — |
 
 Calendar uses native EventKit on macOS (Google calendars already synced to
 Apple Calendar just work) and the Google Calendar API on Windows/Linux.
 
 What Hearth deliberately does **not** have: arbitrary shell or AppleScript
-execution, unrestricted filesystem access, screen control, telemetry, cloud
-model fallback, background monitoring, or autonomous scheduled actions.
+execution, unrestricted filesystem access, screen control, telemetry, silent
+cloud calls (the cloud fallback is off by default and labeled in chat when
+used), background monitoring, or autonomous scheduled actions.
 
 
 ## What you need to download
@@ -121,6 +126,29 @@ in an approved folder, or approve a screenshot capture and ask "what's on my
 screen?". Images stay within the current turn so the context window doesn't
 silt up.
 
+**Document attachments:** the ＋ button also takes PDFs, Word documents
+(.docx), and text/code files. Hearth extracts the text locally (capped so it
+fits the context window) and hands it to the model as quoted content — a
+document that contains instructions is something to summarize, not obey.
+Scanned PDFs without a text layer get a hint to attach page images instead.
+
+**Voice input:** click the 🎤 button, speak, click ■ — a local Whisper model
+transcribes on this machine and puts the text in the input box for you to
+review and send. The model itself can't ingest audio through Ollama, so
+speech-to-text runs as a separate local step; your voice never leaves the
+device. The optional packages install via `pip install "hearth[voice]"`
+(run.py attempts this automatically), and the ~75 MB speech model downloads
+once, only after you agree in the app.
+
+**Cloud fallback (optional):** off by default. If you enable it in Settings
+and store an API key for Google Gemini, OpenAI, DeepSeek, or NVIDIA (keys go
+to the OS keychain, never files), Hearth will answer through the first
+configured provider **only when the local model is unreachable** — Ollama not
+installed yet, the model still downloading, or a mid-request failure. Every
+cloud-answered turn is labeled in the chat, tool confirmations work exactly
+the same, and Gemini/OpenAI can even handle image attachments while filling
+in.
+
 **Skills (/commands):** type /today, /inbox, /focus, or /tidy in the chat box.
 Add your own by dropping a markdown file into the skills folder in Hearth's
 data directory — first line `# name — description`, body is the prompt
@@ -139,7 +167,7 @@ a time and lets Ollama unload the model after `keep_alive` (default 5 minutes).
 ## Development
 
 ```bash
-./scripts/test.sh          # pytest — 149 tests, no network, no real side effects
+./scripts/test.sh          # pytest — 178 tests, no network, no real side effects
 ./scripts/format.sh        # ruff format + lint
 ./scripts/package.sh       # PyInstaller build for the current platform
 ```

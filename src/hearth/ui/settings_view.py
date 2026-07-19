@@ -1,5 +1,6 @@
-"""Settings: model, runtime, and Google credentials file. Saved to the
-per-user config.toml; model changes apply on the next message."""
+"""Settings: model, runtime, Google credentials, and cloud fallback keys.
+Config values go to the per-user config.toml; API keys go to the OS
+credential store only. Model changes apply on the next message."""
 
 from __future__ import annotations
 
@@ -20,13 +21,16 @@ from PySide6.QtWidgets import (
 )
 
 from ..config import Config
+from ..runtime.cloud import CLOUD_PROVIDERS
+from ..storage.keychain import SecretStore
 
 
 class SettingsView(QWidget):
-    def __init__(self, config: Config, on_saved: Callable[[Config], None]):
+    def __init__(self, config: Config, on_saved: Callable[[Config], None], secrets: SecretStore):
         super().__init__()
         self._config = config
         self._on_saved = on_saved
+        self._secrets = secrets
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 14, 18, 14)
@@ -121,6 +125,44 @@ class SettingsView(QWidget):
         google_layout.addLayout(cred_row)
         layout.addWidget(google_frame)
 
+        fallback_frame = QFrame()
+        fallback_frame.setProperty("card", True)
+        fallback_layout = QVBoxLayout(fallback_frame)
+        fheading = QLabel("Cloud fallback (optional)")
+        fheading.setProperty("h2", True)
+        fallback_layout.addWidget(fheading)
+        fhint = QLabel(
+            "Off by default. Used only when the local model is unreachable, and the "
+            "chat labels every cloud-answered turn. Your conversation is sent to that "
+            "provider for those turns. Keys are stored in the system keychain, never "
+            "in files."
+        )
+        fhint.setProperty("muted", True)
+        fhint.setWordWrap(True)
+        fallback_layout.addWidget(fhint)
+        self._fallback_enabled = QCheckBox("Allow cloud fallback when the local model is down")
+        self._fallback_enabled.setChecked(config.fallback.enabled)
+        fallback_layout.addWidget(self._fallback_enabled)
+
+        self._key_fields: dict[str, QLineEdit] = {}
+        for provider_id, spec in CLOUD_PROVIDERS.items():
+            row = QHBoxLayout()
+            lab = QLabel(f"{spec.label} API key")
+            lab.setProperty("muted", True)
+            lab.setMinimumWidth(220)
+            field = QLineEdit()
+            field.setEchoMode(QLineEdit.EchoMode.Password)
+            clear = QPushButton("Clear")
+            clear.setProperty("secondary", True)
+            clear.clicked.connect(lambda _=False, p=provider_id: self._clear_key(p))
+            row.addWidget(lab)
+            row.addWidget(field, stretch=1)
+            row.addWidget(clear)
+            fallback_layout.addLayout(row)
+            self._key_fields[provider_id] = field
+        self._refresh_key_placeholders()
+        layout.addWidget(fallback_frame)
+
         save_row = QHBoxLayout()
         self._status = QLabel("")
         self._status.setProperty("muted", True)
@@ -139,6 +181,19 @@ class SettingsView(QWidget):
         if path:
             self._credentials.setText(path)
 
+    def _refresh_key_placeholders(self) -> None:
+        for provider_id, field in self._key_fields.items():
+            stored = self._secrets.get(CLOUD_PROVIDERS[provider_id].key_name)
+            field.setPlaceholderText(
+                "saved in keychain — paste to replace" if stored else "not set"
+            )
+
+    def _clear_key(self, provider_id: str) -> None:
+        self._secrets.delete(CLOUD_PROVIDERS[provider_id].key_name)
+        self._key_fields[provider_id].clear()
+        self._refresh_key_placeholders()
+        self._status.setText(f"{CLOUD_PROVIDERS[provider_id].label} key removed.")
+
     def _save(self) -> None:
         self._config.model.name = self._model_name.text().strip() or self._config.model.name
         self._config.model.context_length = self._context.value()
@@ -147,6 +202,12 @@ class SettingsView(QWidget):
         self._config.ollama.autostart = self._autostart.isChecked()
         self._config.gmail.credentials_file = self._credentials.text().strip()
         self._config.ui.theme = ["system", "dark", "light"][self._theme.currentIndex()]
+        self._config.fallback.enabled = self._fallback_enabled.isChecked()
+        for provider_id, field in self._key_fields.items():
+            if value := field.text().strip():
+                self._secrets.set(CLOUD_PROVIDERS[provider_id].key_name, value)
+                field.clear()
+        self._refresh_key_placeholders()
         self._config.save()
         self._on_saved(self._config)
         self._status.setText("Saved. Model changes apply to the next message.")

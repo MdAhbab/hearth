@@ -126,6 +126,9 @@ QPushButton#editBtn, QPushButton[secondary="true"] {{
     border-radius: 8px; padding: 8px 14px;
 }}
 QPushButton#editBtn:hover, QPushButton[secondary="true"]:hover {{ background: {secondaryHover}; }}
+QPushButton[voiceRecording="true"], QPushButton[voiceRecording="true"]:hover {{
+    background: {reject}; color: white; border: 1px solid {reject};
+}}
 
 QPlainTextEdit#chatInput {{
     background: {bgInput}; color: {text}; border: 1px solid {borderInput};

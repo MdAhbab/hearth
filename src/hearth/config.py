@@ -72,6 +72,21 @@ class MCPConfig(BaseModel):
     servers: list[MCPServerConfig] = Field(default_factory=list)
 
 
+class FallbackConfig(BaseModel):
+    """Opt-in cloud fallback, used only when the local model is unreachable.
+
+    API keys are NOT stored here — they live in the OS credential store
+    (see runtime/cloud.py). Off by default; every cloud turn is labeled.
+    """
+
+    enabled: bool = False
+    order: list[str] = Field(default_factory=lambda: ["gemini", "openai", "deepseek", "nvidia"])
+    gemini_model: str = "gemini-2.5-flash"
+    openai_model: str = "gpt-4o-mini"
+    deepseek_model: str = "deepseek-chat"
+    nvidia_model: str = "nvidia/llama-3.1-nemotron-70b-instruct"
+
+
 class UIConfig(BaseModel):
     # "system" follows the OS appearance; or force "dark" / "light".
     theme: str = "system"
@@ -89,6 +104,7 @@ class Config(BaseModel):
     calendar: CalendarConfig = Field(default_factory=CalendarConfig)
     files: FilesConfig = Field(default_factory=FilesConfig)
     web: WebConfig = Field(default_factory=WebConfig)
+    fallback: FallbackConfig = Field(default_factory=FallbackConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
 
@@ -105,6 +121,10 @@ class Config(BaseModel):
         """Persist the current config as TOML (simple flat emitter)."""
         path = path or default_config_path()
         path.parent.mkdir(parents=True, exist_ok=True)
+
+        def quote(value: str) -> str:
+            return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
         lines: list[str] = []
         for section, model in (
             ("model", self.model),
@@ -113,6 +133,7 @@ class Config(BaseModel):
             ("calendar", self.calendar),
             ("files", self.files),
             ("web", self.web),
+            ("fallback", self.fallback),
             ("ui", self.ui),
         ):
             lines.append(f"[{section}]")
@@ -121,13 +142,11 @@ class Config(BaseModel):
                     lines.append(f"{key} = {'true' if value else 'false'}")
                 elif isinstance(value, (int, float)):
                     lines.append(f"{key} = {value}")
+                elif isinstance(value, list):
+                    lines.append(f"{key} = [{', '.join(quote(str(v)) for v in value)}]")
                 else:
-                    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
-                    lines.append(f'{key} = "{escaped}"')
+                    lines.append(f"{key} = {quote(str(value))}")
             lines.append("")
-
-        def quote(value: str) -> str:
-            return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
         for server in self.mcp.servers:
             lines.append("[[mcp.servers]]")

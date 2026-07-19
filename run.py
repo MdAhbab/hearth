@@ -48,7 +48,9 @@ def find_compatible_python() -> list[str] | None:
         try:
             probe = subprocess.run(
                 [*argv, "-c", "import sys; print(sys.version_info[0], sys.version_info[1])"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
             if probe.returncode == 0:
                 major, minor = map(int, probe.stdout.split())
@@ -62,9 +64,7 @@ def find_compatible_python() -> list[str] | None:
 def venv_ready() -> bool:
     if not VENV_PYTHON.exists():
         return False
-    check = subprocess.run(
-        [str(VENV_PYTHON), "-c", "import hearth"], capture_output=True
-    )
+    check = subprocess.run([str(VENV_PYTHON), "-c", "import hearth"], capture_output=True)
     return check.returncode == 0
 
 
@@ -90,6 +90,16 @@ def bootstrap() -> None:
         [str(VENV_PYTHON), "-m", "pip", "install", "--quiet", "-e", str(ROOT)],
         check=True,
     )
+    # Voice input is optional (audio packages need PortAudio); best effort only.
+    voice = subprocess.run(
+        [str(VENV_PYTHON), "-m", "pip", "install", "--quiet", "-e", f"{ROOT}[voice]"],
+    )
+    if voice.returncode != 0:
+        print(
+            "Note: voice-input packages could not be installed. Hearth works without "
+            "them; the mic button will explain how to add voice later.",
+            flush=True,
+        )
     print("Setup complete.", flush=True)
 
 
