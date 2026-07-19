@@ -25,7 +25,7 @@ VENV = ROOT / ".venv"
 WINDOWS = sys.platform == "win32"
 VENV_PYTHON = VENV / ("Scripts/python.exe" if WINDOWS else "bin/python")
 
-SUPPORTED = ((3, 11), (3, 12))
+SUPPORTED = ((3, 11), (3, 12), (3, 13))
 
 
 def version_ok(major: int, minor: int) -> bool:
@@ -39,8 +39,8 @@ def find_compatible_python() -> list[str] | None:
 
     candidates: list[list[str]] = []
     if WINDOWS and shutil.which("py"):
-        candidates += [["py", "-3.12"], ["py", "-3.11"]]
-    for name in ("python3.12", "python3.11"):
+        candidates += [["py", "-3.12"], ["py", "-3.13"], ["py", "-3.11"]]
+    for name in ("python3.12", "python3.13", "python3.11"):
         if path := shutil.which(name):
             candidates.append([path])
 
@@ -72,7 +72,7 @@ def bootstrap() -> None:
     base = find_compatible_python()
     if base is None:
         sys.exit(
-            "Hearth needs Python 3.11 or 3.12 and none was found.\n"
+            "Hearth needs Python 3.11–3.13 and none was found.\n"
             "Install it from https://www.python.org/downloads/ "
             "(macOS: 'brew install python@3.11'), then run this again."
         )

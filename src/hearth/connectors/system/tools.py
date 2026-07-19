@@ -3,8 +3,10 @@
 Cross-platform: open URL (confirmed — the exact URL is shown, which also
 blocks data exfiltration via crafted links), reveal in file manager, show a
 notification, read/set clipboard.
-macOS-only extras: open app, run *user-approved* Shortcuts by exact name,
-read the active Chrome tab (Automation permission).
+Open app: macOS by bundle id/name; Windows by Start Menu shortcut name —
+only installed apps can be launched, never arbitrary commands.
+macOS-only extras: run *user-approved* Shortcuts by exact name, read the
+active Chrome tab (Automation permission).
 
 There is deliberately NO arbitrary shell, arbitrary AppleScript, or
 screen-control tool. Every subprocess uses a fixed argv list — no shell
@@ -14,6 +16,7 @@ string interpolation anywhere.
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 import sys
 import webbrowser
@@ -213,6 +216,89 @@ def register_system_tools(
 
     if sys.platform == "darwin":
         _register_macos_tools(registry, approved_shortcuts)
+    elif sys.platform == "win32":
+        _register_windows_tools(registry)
+
+
+# ---- Windows: open installed apps via their Start Menu shortcuts ----
+
+
+def _start_menu_dirs() -> list[Path]:
+    dirs: list[Path] = []
+    for env in ("APPDATA", "PROGRAMDATA"):
+        if base := os.environ.get(env):
+            dirs.append(Path(base) / "Microsoft/Windows/Start Menu/Programs")
+    return dirs
+
+
+def find_start_menu_apps(name: str, dirs: list[Path] | None = None) -> list[Path]:
+    """Installed apps whose Start Menu shortcut matches ``name``.
+
+    Exact stem matches come first, then substring matches; duplicates of the
+    same app across the user and system menus are collapsed. Restricting the
+    search to existing .lnk files is what keeps this tool safe — it can only
+    launch what the user (or an installer) already put in the Start Menu.
+    """
+    query = name.strip().lower()
+    if not query:
+        return []
+    exact: list[Path] = []
+    partial: list[Path] = []
+    seen: set[str] = set()
+    for directory in dirs if dirs is not None else _start_menu_dirs():
+        if not directory.is_dir():
+            continue
+        for lnk in sorted(directory.rglob("*.lnk")):
+            stem = lnk.stem.lower()
+            if stem in seen:
+                continue
+            if stem == query:
+                seen.add(stem)
+                exact.append(lnk)
+            elif query in stem:
+                seen.add(stem)
+                partial.append(lnk)
+    return exact + partial
+
+
+def _register_windows_tools(registry: ToolRegistry) -> None:
+    class WindowsOpenAppParams(BaseModel):
+        app: str = Field(
+            min_length=1,
+            description="Name of an installed application, e.g. 'Notepad' or 'Google Chrome'",
+        )
+
+    async def open_app(p: WindowsOpenAppParams) -> ToolResult:
+        matches = await asyncio.to_thread(find_start_menu_apps, p.app)
+        if not matches:
+            return ToolResult(
+                ok=False,
+                error=f"No installed app matching '{p.app}' was found in the Start Menu.",
+            )
+        first_is_exact = matches[0].stem.lower() == p.app.strip().lower()
+        if len(matches) > 1 and not first_is_exact:
+            names = ", ".join(m.stem for m in matches[:5])
+            return ToolResult(
+                ok=False,
+                error=f"'{p.app}' is ambiguous — did you mean one of: {names}?",
+            )
+        target = matches[0]
+        await asyncio.to_thread(os.startfile, str(target))  # noqa: S606 — .lnk only
+        return ToolResult(ok=True, data=f"Opened {target.stem}")
+
+    registry.register(
+        ToolSpec(
+            name="system_open_app",
+            description=(
+                "Open an installed Windows application by name (matched against "
+                "the Start Menu; only installed apps can be opened)."
+            ),
+            params_model=WindowsOpenAppParams,
+            risk=RiskLevel.READ,
+            permission="system",
+            handler=open_app,
+        )
+    )
 
 
 def _register_macos_tools(

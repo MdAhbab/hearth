@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -25,9 +26,10 @@ MAX_SECONDS = 120  # hard cap ≈ 7 MB of float32 audio
 MIN_SECONDS = 0.4
 DEFAULT_MODEL = "base"  # ~75 MB download, ~150 MB RAM while transcribing
 
+_PIP = ".venv\\Scripts\\pip" if sys.platform == "win32" else ".venv/bin/pip"
 INSTALL_HINT = (
     "Voice input needs optional packages that are not installed. "
-    'Run: .venv/bin/pip install "hearth[voice]"  (installs faster-whisper, '
+    f'Run: {_PIP} install "hearth[voice]"  (installs faster-whisper, '
     "sounddevice, numpy), then restart Hearth."
 )
 
