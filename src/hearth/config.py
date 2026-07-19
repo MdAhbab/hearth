@@ -30,6 +30,9 @@ def default_config_path() -> Path:
 
 
 class ModelConfig(BaseModel):
+    # provider: "ollama" (local, default) or a cloud id — "gemini", "openai",
+    # "deepseek", "nvidia". Cloud providers need an API key stored via Settings
+    # and are always labeled in the UI; local stays the default.
     provider: str = "ollama"
     name: str = "gemma4:e2b"
     context_length: int = 4096
@@ -92,6 +95,15 @@ class UIConfig(BaseModel):
     theme: str = "system"
 
 
+class UserConfig(BaseModel):
+    """Optional personalization. Stays in the local config file and is only
+    ever injected into the system prompt / greeting — never sent anywhere
+    except to the model answering the chat."""
+
+    name: str = ""
+    about: str = ""  # e.g. "I'm a CS student in Dhaka; I prefer short answers."
+
+
 class WebConfig(BaseModel):
     max_fetch_bytes: int = 500_000
     fetch_timeout_s: float = 20.0
@@ -106,6 +118,7 @@ class Config(BaseModel):
     web: WebConfig = Field(default_factory=WebConfig)
     fallback: FallbackConfig = Field(default_factory=FallbackConfig)
     ui: UIConfig = Field(default_factory=UIConfig)
+    user: UserConfig = Field(default_factory=UserConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
 
     @classmethod
@@ -135,6 +148,7 @@ class Config(BaseModel):
             ("web", self.web),
             ("fallback", self.fallback),
             ("ui", self.ui),
+            ("user", self.user),
         ):
             lines.append(f"[{section}]")
             for key, value in model.model_dump().items():

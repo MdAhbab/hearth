@@ -12,11 +12,11 @@ import signal
 import sys
 from pathlib import Path
 
-from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QMessageBox, QStyle, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
 from .agent.gate import ActionGate, ApprovalRequest, ApprovalResponse
 from .agent.loop import AgentEvent, AgentLoop
+from .agent.prompts import build_system_prompt
 from .agent.tools import ToolRegistry
 from .attachments import extract_document, frame_document
 from .config import Config, app_data_dir
@@ -31,7 +31,12 @@ from .connectors.utility import register_utility_tools
 from .connectors.weather import register_weather_tools
 from .logging_setup import setup_logging
 from .permissions import Permissions
-from .runtime.cloud import FallbackProvider, build_cloud_chain
+from .runtime.cloud import (
+    CLOUD_PROVIDERS,
+    FallbackProvider,
+    build_cloud_chain,
+    build_primary_provider,
+)
 from .runtime.ollama_manager import OllamaRuntimeManager, RuntimeState
 from .runtime.provider import ChatMessage, OllamaProvider
 from .skills import SkillLibrary
@@ -42,7 +47,7 @@ from .ui.history_view import HistoryView
 from .ui.main_window import MainWindow
 from .ui.permission_center import PermissionCenter
 from .ui.settings_view import SettingsView
-from .ui.theme import apply_theme
+from .ui.theme import app_icon, apply_theme
 from .voice import VoiceError, VoiceInput
 
 log = logging.getLogger(__name__)
@@ -87,7 +92,12 @@ class HearthApp:
 
         # UI
         self.window = MainWindow()
-        self.chat = ChatView(on_send=self._on_send, on_stop=self._on_stop, on_voice=self._on_voice)
+        self.chat = ChatView(
+            on_send=self._on_send,
+            on_stop=self._on_stop,
+            on_voice=self._on_voice,
+            greeting_name=self.config.user.name,
+        )
         self.permission_center = PermissionCenter(
             self.permissions,
             self.db,
@@ -97,7 +107,10 @@ class HearthApp:
         )
         self.history_view = HistoryView(self.db)
         self.settings_view = SettingsView(
-            self.config, on_saved=self._on_settings_saved, secrets=self.secrets
+            self.config,
+            on_saved=self._on_settings_saved,
+            secrets=self.secrets,
+            list_models=self._installed_models,
         )
         self.window.add_view("Chat", self.chat)
         self.window.add_view("Permissions", self.permission_center)
@@ -105,24 +118,29 @@ class HearthApp:
         self.window.add_view("Settings", self.settings_view)
         self.window.finish_sidebar()
 
-        self._tray = QSystemTrayIcon(self._default_icon(), self._qt)
+        icon = app_icon()
+        self._qt.setWindowIcon(icon)
+        self._tray = QSystemTrayIcon(icon, self._qt)
         self._tray.show()
 
         # gate + agent (approval cards live in the chat view)
         self.gate = ActionGate(
             self.db, self.registry, self.permissions.check, self._request_approval
         )
+        self._system_prompt = build_system_prompt(self.config.user.name, self.config.user.about)
         self.agent = AgentLoop(
             self.provider,
             self.registry,
             self.gate,
             max_steps=self.config.model.max_agent_steps,
+            system_prompt=self._system_prompt,
         )
 
         self.skills = SkillLibrary()
         self.conversation_id = self.db.create_conversation()
         self._history: list[ChatMessage] = []
         self._active_task: asyncio.Task | None = None
+        self._cloud_primary_noted = False
 
         apply_theme(self._qt, self.config.ui.theme)
         try:
@@ -133,9 +151,6 @@ class HearthApp:
         self._qt.aboutToQuit.connect(self._shutdown)
 
     # -- wiring ---------------------------------------------------------------
-
-    def _default_icon(self) -> QIcon:
-        return self._qt.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
 
     def _register_tools(self) -> None:
         register_utility_tools(self.registry, self.config.web)
@@ -204,31 +219,25 @@ class HearthApp:
     def _on_settings_saved(self, config: Config) -> None:
         apply_theme(self._qt, config.ui.theme)
         self.runtime.update_config(config.ollama)
+        self._cloud_primary_noted = False  # re-announce if a cloud model is picked
+        self._system_prompt = build_system_prompt(config.user.name, config.user.about)
         self.provider = OllamaProvider(config.model, config.ollama)
         self.agent = AgentLoop(
-            self.provider, self.registry, self.gate, max_steps=config.model.max_agent_steps
+            self.provider,
+            self.registry,
+            self.gate,
+            max_steps=config.model.max_agent_steps,
+            system_prompt=self._system_prompt,
         )
+        self.window.set_status(f"Model: {self._model_label()} — ready")
 
     # -- chat flow -----------------------------------------------------------------
 
     def _on_send(self, text: str, attachment_paths: list[str] | None = None) -> None:
         if self._active_task and not self._active_task.done():
             return
-        from .images import encode_image_file, is_image_path
-
-        images: list[str] = []
-        doc_blocks: list[str] = []
-        attached_names: list[str] = []
-        for path in attachment_paths or []:
-            name = Path(path).name
-            try:
-                if is_image_path(path):
-                    images.append(encode_image_file(path))
-                else:
-                    doc_blocks.append(frame_document(extract_document(path)))
-                attached_names.append(name)
-            except Exception as exc:  # noqa: BLE001 — a bad file shouldn't block the send
-                self.chat.add_tool_note(f"Could not attach {name}: {exc}")
+        attachment_paths = attachment_paths or []
+        attached_names = [Path(p).name for p in attachment_paths]
 
         model_text = text
         if text.startswith("/"):
@@ -239,8 +248,6 @@ class HearthApp:
                 self.chat.add_assistant_message(self.skills.help_text())
                 return
             model_text = expanded
-        if doc_blocks:
-            model_text = "\n\n".join([model_text, *doc_blocks])
 
         suffix = f"\n[attached: {', '.join(attached_names)}]" if attached_names else ""
         self.chat.add_user_message(text + suffix)
@@ -249,7 +256,12 @@ class HearthApp:
         history_text = text + ("\n[attachments were included earlier]" if attached_names else "")
         self.chat.set_busy(True)
         self._active_task = asyncio.ensure_future(
-            self._run_turn(model_text, display_text=text, images=images, history_text=history_text)
+            self._run_turn(
+                model_text,
+                display_text=text,
+                attachment_paths=attachment_paths,
+                history_text=history_text,
+            )
         )
 
     def _on_stop(self) -> None:
@@ -261,12 +273,22 @@ class HearthApp:
         self,
         text: str,
         display_text: str | None = None,
-        images: list[str] | None = None,
+        attachment_paths: list[str] | None = None,
         history_text: str | None = None,
     ) -> None:
         display_text = display_text if display_text is not None else text
         history_text = history_text if history_text is not None else text
         try:
+            # Encoding a photo or extracting a 40-page PDF takes seconds; do it
+            # off the UI thread (QImage, unlike QPixmap, is thread-safe).
+            images, doc_blocks, failures = await asyncio.to_thread(
+                _process_attachments, attachment_paths or []
+            )
+            for note in failures:
+                self.chat.add_tool_note(note)
+            if doc_blocks:
+                text = "\n\n".join([text, *doc_blocks])
+
             agent, model_label = await self._pick_agent()
             if agent is None:
                 return  # _pick_agent already told the user why
@@ -315,23 +337,63 @@ class HearthApp:
         except asyncio.CancelledError:
             self.chat.end_stream("")
             self.chat.add_tool_note("Stopped.")
-            self.window.set_status(f"Model: {self.config.model.name} — ready")
+            self.window.set_status(f"Model: {self._model_label()} — ready")
         except Exception as exc:  # noqa: BLE001 — last-resort guard for the UI
             log.exception("Turn failed")
             self.chat.end_stream("")
+            hint = (
+                "check the log file and that Ollama has enough free memory"
+                if self.config.model.provider == "ollama"
+                else "check the log file and the provider's API key in Settings"
+            )
             self.chat.add_assistant_message(
-                f"Something went wrong: {exc}. If this keeps happening, check the "
-                "log file and that Ollama has enough free memory."
+                f"Something went wrong: {exc}. If this keeps happening, {hint}."
             )
         finally:
             self.chat.set_busy(False)
 
     # -- provider selection ------------------------------------------------------
 
+    async def _installed_models(self) -> list[dict]:
+        """Installed Ollama models for the Settings picker. Starts the daemon
+        if allowed — unless a cloud primary is selected, in which case an idle
+        daemon shouldn't be spun up just to fill a dropdown."""
+        if self.config.model.provider != "ollama":
+            if not await self.runtime.is_daemon_up():
+                return []
+        elif await self.runtime.ensure_running() is not RuntimeState.READY:
+            return []
+        return await self.runtime.list_models(fresh=True)
+
+    def _model_label(self) -> str:
+        if self.config.model.provider == "ollama":
+            return self.config.model.name
+        spec = CLOUD_PROVIDERS.get(self.config.model.provider)
+        label = spec.label if spec else self.config.model.provider
+        return f"{label} · {self.config.model.name} (cloud)"
+
     async def _pick_agent(self) -> tuple[AgentLoop | None, str]:
-        """The local agent when the local model is reachable; otherwise the
-        cloud fallback chain if enabled and configured; otherwise None after
-        explaining the situation in the chat."""
+        """The agent for the model chosen in Settings: a cloud provider when
+        the user explicitly picked one; otherwise the local agent when the
+        local model is reachable; otherwise the cloud fallback chain if
+        enabled; otherwise None after explaining the situation in the chat."""
+        if self.config.model.provider != "ollama":
+            picked = self._primary_cloud_agent()
+            if picked is None:
+                self.chat.add_assistant_message(
+                    f"The cloud model you selected ({self._model_label()}) has no API key "
+                    "stored. Add the key in Settings, or switch back to a local model."
+                )
+                return None, ""
+            agent, label = picked
+            if not self._cloud_primary_noted:
+                self._cloud_primary_noted = True
+                self.chat.add_tool_note(
+                    f"Using {label} — messages go to this provider until you pick a "
+                    "local model in Settings."
+                )
+            return agent, label
+
         state = await self.runtime.ensure_running()
         if state is RuntimeState.READY and await self.runtime.model_available(
             self.config.model.name
@@ -367,10 +429,24 @@ class HearthApp:
                 f"{label} did not answer — trying the next cloud fallback…"
             ),
         )
-        agent = AgentLoop(
-            provider, self.registry, self.gate, max_steps=self.config.model.max_agent_steps
+        return self._wrap_agent(provider), f"{chain[0].label} (cloud)"
+
+    def _primary_cloud_agent(self) -> tuple[AgentLoop, str] | None:
+        provider = build_primary_provider(
+            self.config.model.provider, self.config.model.name, self.secrets
         )
-        return agent, f"{chain[0].label} (cloud)"
+        if provider is None:
+            return None
+        return self._wrap_agent(provider), self._model_label()
+
+    def _wrap_agent(self, provider) -> AgentLoop:
+        return AgentLoop(
+            provider,
+            self.registry,
+            self.gate,
+            max_steps=self.config.model.max_agent_steps,
+            system_prompt=self._system_prompt,
+        )
 
     # -- voice input -------------------------------------------------------------
 
@@ -444,13 +520,17 @@ class HearthApp:
 
     async def startup_check(self) -> None:
         try:
-            state = await self.runtime.ensure_running()
-            if state is RuntimeState.READY and not await self.runtime.model_available(
-                self.config.model.name
-            ):
-                state = RuntimeState.MODEL_MISSING
-                self.runtime.state = state
-            self._set_status_for_state(state)
+            if self.config.model.provider != "ollama":
+                # Cloud model chosen: don't autostart Ollama just to sit idle.
+                self.window.set_status(f"Model: {self._model_label()}")
+            else:
+                state = await self.runtime.ensure_running()
+                if state is RuntimeState.READY and not await self.runtime.model_available(
+                    self.config.model.name
+                ):
+                    state = RuntimeState.MODEL_MISSING
+                    self.runtime.state = state
+                self._set_status_for_state(state)
             if self.config.mcp.servers and self.permissions.check("mcp"):
                 await self.mcp.start()
         except Exception:  # noqa: BLE001 — status check must never crash startup
@@ -465,6 +545,29 @@ class HearthApp:
         self.mcp.kill_all()
         self.runtime.shutdown()
         self.db.close()
+
+
+def _process_attachments(paths: list[str]) -> tuple[list[str], list[str], list[str]]:
+    """Encode images / extract documents for one turn. Runs in a worker thread.
+
+    Returns (base64 images, framed document blocks, user-facing failure notes);
+    one bad file never blocks the send.
+    """
+    from .images import encode_image_file, is_image_path
+
+    images: list[str] = []
+    doc_blocks: list[str] = []
+    failures: list[str] = []
+    for path in paths:
+        name = Path(path).name
+        try:
+            if is_image_path(path):
+                images.append(encode_image_file(path))
+            else:
+                doc_blocks.append(frame_document(extract_document(path)))
+        except Exception as exc:  # noqa: BLE001 — report per file, keep going
+            failures.append(f"Could not attach {name}: {exc}")
+    return images, doc_blocks, failures
 
 
 def main() -> None:

@@ -77,6 +77,12 @@ MIGRATIONS: list[str] = [
         created_at REAL NOT NULL
     );
     """,
+    # v3 — indexes for the queries that grow with months of use
+    """
+    CREATE INDEX idx_messages_conversation ON messages(conversation_id);
+    CREATE INDEX idx_actions_conversation ON actions(conversation_id);
+    CREATE INDEX idx_reminders_open ON reminders(completed, due_at);
+    """,
 ]
 
 
@@ -91,22 +97,30 @@ class _LockedConnection:
     def __init__(self, conn: sqlite3.Connection):
         self._conn = conn
         self._lock = threading.RLock()
+        self._closed = False
 
     def execute(self, sql: str, params: tuple = ()) -> sqlite3.Cursor:
         with self._lock:
+            if self._closed:
+                raise sqlite3.ProgrammingError("database is closed")
             return self._conn.execute(sql, params)
 
     def executescript(self, script: str) -> sqlite3.Cursor:
         with self._lock:
+            if self._closed:
+                raise sqlite3.ProgrammingError("database is closed")
             return self._conn.executescript(script)
 
     def commit(self) -> None:
         with self._lock:
-            self._conn.commit()
+            if not self._closed:
+                self._conn.commit()
 
     def close(self) -> None:
         with self._lock:
-            self._conn.close()
+            if not self._closed:
+                self._closed = True
+                self._conn.close()
 
 
 class Database:
@@ -187,11 +201,16 @@ class Database:
         return cur.lastrowid
 
     def update_action(self, action_id: int, status: str, result_summary: str = "") -> None:
-        self._conn.execute(
-            "UPDATE actions SET status = ?, result_summary = ?, decided_at = ? WHERE id = ?",
-            (status, result_summary, time.time(), action_id),
-        )
-        self._conn.commit()
+        try:
+            self._conn.execute(
+                "UPDATE actions SET status = ?, result_summary = ?, decided_at = ? WHERE id = ?",
+                (status, result_summary, time.time(), action_id),
+            )
+            self._conn.commit()
+        except sqlite3.ProgrammingError:
+            # App quitting: a cancelled task may finalize its audit row after
+            # close(). Losing that last status update is fine; crashing isn't.
+            pass
 
     def list_actions(self, limit: int = 200) -> list[sqlite3.Row]:
         return self._conn.execute(

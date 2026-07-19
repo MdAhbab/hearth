@@ -1,4 +1,4 @@
-"""Tests for reminders connector — SQLite fallback path (Capability 3).
+"""Tests for reminders connector â€” SQLite fallback path (Capability 3).
 
 The macOS EventKit path requires a real Mac + Reminders permission grant, so
 we test only the SQLite fallback which is the cross-platform path. EventKit
@@ -114,7 +114,7 @@ async def test_reminder_with_due_date(registry):
 def test_db_migration_creates_reminders_table(tmp_path):
     db = Database(tmp_path / "mig.db")
     # Should be version 2 after migration
-    assert db.schema_version == 2
+    assert db.schema_version >= 2
     # Should be able to add a reminder without error
     row_id = db.add_reminder("Test", "notes", None)
     assert row_id > 0

@@ -103,3 +103,40 @@ async def test_model_available_checks_tags():
         assert await manager.model_available("gemma4:e2b")
         assert await manager.model_available("llama3")
         assert not await manager.model_available("gemma4:e4b")
+
+
+async def test_list_models_caches_and_refreshes():
+    manager = make_manager()
+    calls = {"n": 0}
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"models": [{"name": "gemma4:e4b", "size": 9_600_000_000}]}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url):
+            calls["n"] += 1
+            return FakeResponse()
+
+    with patch("hearth.runtime.ollama_manager.httpx.AsyncClient", FakeClient):
+        first = await manager.list_models()
+        assert first[0]["name"] == "gemma4:e4b"
+        assert first[0]["size_gb"] == 8.9  # bytes -> GiB, rounded
+        await manager.list_models()
+        assert calls["n"] == 1  # served from cache
+        await manager.list_models(fresh=True)
+        assert calls["n"] == 2  # explicit refresh bypasses it

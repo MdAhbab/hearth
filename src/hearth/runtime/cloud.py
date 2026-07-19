@@ -271,18 +271,22 @@ class FallbackProvider:
         raise CloudProviderError("All cloud fallbacks failed: " + " | ".join(errors))
 
 
+def configured_model(fallback: FallbackConfig, provider_id: str) -> str:
+    """The model id configured for a cloud provider (config [fallback] section)."""
+    return {
+        "gemini": fallback.gemini_model,
+        "openai": fallback.openai_model,
+        "deepseek": fallback.deepseek_model,
+        "nvidia": fallback.nvidia_model,
+    }.get(provider_id, "")
+
+
 def build_cloud_chain(
     fallback: FallbackConfig,
     secrets: SecretStore,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> list[OpenAICompatProvider]:
     """Providers with a stored API key, in the configured priority order."""
-    models = {
-        "gemini": fallback.gemini_model,
-        "openai": fallback.openai_model,
-        "deepseek": fallback.deepseek_model,
-        "nvidia": fallback.nvidia_model,
-    }
     chain: list[OpenAICompatProvider] = []
     for provider_id in fallback.order:
         spec = CLOUD_PROVIDERS.get(provider_id)
@@ -291,5 +295,29 @@ def build_cloud_chain(
             continue
         key = secrets.get(spec.key_name)
         if key:
-            chain.append(OpenAICompatProvider(spec, key, models[provider_id], transport=transport))
+            chain.append(
+                OpenAICompatProvider(
+                    spec, key, configured_model(fallback, provider_id), transport=transport
+                )
+            )
     return chain
+
+
+def build_primary_provider(
+    provider_id: str,
+    model: str,
+    secrets: SecretStore,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> OpenAICompatProvider | None:
+    """A single cloud provider chosen as the *primary* model in Settings.
+
+    Returns None when the id is unknown or no API key is stored — the caller
+    explains that in the chat instead of failing.
+    """
+    spec = CLOUD_PROVIDERS.get(provider_id)
+    if spec is None:
+        return None
+    key = secrets.get(spec.key_name)
+    if not key:
+        return None
+    return OpenAICompatProvider(spec, key, model, transport=transport)

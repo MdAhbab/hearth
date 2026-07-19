@@ -7,6 +7,10 @@
 # The Settings screen in the app edits this file for you.
 
 [model]
+# provider "ollama" runs locally (default). Setting it to "gemini", "openai",
+# "deepseek", or "nvidia" makes that cloud model the primary — it needs an API
+# key stored via Settings and is labeled in the app. The Settings model picker
+# writes both fields for you.
 provider = "ollama"
 name = "gemma4:e2b"        # switch to "gemma4:e4b" on a 16 GB+ machine
 context_length = 4096
@@ -54,6 +58,12 @@ nvidia_model = "nvidia/llama-3.1-nemotron-70b-instruct"
 [ui]
 # "system" follows the OS appearance; or force "dark" / "light".
 theme = "system"
+
+[user]
+# Optional personalization: used for the greeting and the system prompt only.
+# Lives in this local file; shared with nothing but the model answering you.
+name = ""
+about = ""                 # e.g. "I'm a CS student in Dhaka; keep answers short"
 
 # ── Optional capabilities ─────────────────────────────────────────────────────
 

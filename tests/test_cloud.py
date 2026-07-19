@@ -185,3 +185,36 @@ async def test_chat_result_protocol_shape():
     provider = _provider(lambda r: httpx.Response(200, text=_sse(_delta(content="ok"))))
     result = await provider.chat([ChatMessage("user", "hi")])
     assert isinstance(result, ChatResult) and result.done
+
+
+# ---- primary cloud model selection (model picker) ----
+
+
+def test_configured_model_maps_every_known_provider():
+    from hearth.runtime.cloud import configured_model
+
+    fallback = FallbackConfig()
+    assert configured_model(fallback, "gemini") == fallback.gemini_model
+    assert configured_model(fallback, "openai") == fallback.openai_model
+    assert configured_model(fallback, "deepseek") == fallback.deepseek_model
+    assert configured_model(fallback, "nvidia") == fallback.nvidia_model
+    assert configured_model(fallback, "nope") == ""
+
+
+def test_build_primary_provider_requires_stored_key():
+    from hearth.runtime.cloud import build_primary_provider
+
+    secrets = InMemorySecretStore()
+    assert build_primary_provider("gemini", "gemini-2.5-flash", secrets) is None
+
+    secrets.set(CLOUD_PROVIDERS["gemini"].key_name, "key-123")
+    provider = build_primary_provider("gemini", "gemini-2.5-flash", secrets)
+    assert provider is not None
+    assert provider.label == "Google Gemini"
+    assert provider.model == "gemini-2.5-flash"
+
+
+def test_build_primary_provider_unknown_id_is_none():
+    from hearth.runtime.cloud import build_primary_provider
+
+    assert build_primary_provider("mystery", "m", InMemorySecretStore()) is None

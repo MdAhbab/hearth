@@ -52,6 +52,9 @@ def _default_ollama_binary() -> str:
     return "ollama"  # last resort; Popen will raise a clear OSError
 
 
+MODEL_CACHE_TTL_S = 30.0  # skip the per-message /api/tags round-trip
+
+
 class OllamaRuntimeManager:
     def __init__(self, config: OllamaConfig, ollama_binary: str | None = None):
         self._config = config
@@ -61,6 +64,8 @@ class OllamaRuntimeManager:
         self.state = RuntimeState.UNKNOWN
         # One generation at a time: the model barely fits in 8 GB unified memory.
         self.generation_lock = asyncio.Semaphore(1)
+        self._models_cache: list[dict] | None = None
+        self._models_cached_at = 0.0
 
     @property
     def base_url(self) -> str:
@@ -69,6 +74,7 @@ class OllamaRuntimeManager:
     def update_config(self, config: OllamaConfig) -> None:
         """Apply new settings without losing daemon ownership state."""
         self._config = config
+        self._models_cache = None
 
     async def is_daemon_up(self) -> bool:
         try:
@@ -117,17 +123,42 @@ class OllamaRuntimeManager:
         self.state = RuntimeState.UNAVAILABLE
         return self.state
 
-    async def model_available(self, model_name: str) -> bool:
-        """Check the model exists locally. Never pulls."""
+    async def list_models(self, fresh: bool = False) -> list[dict]:
+        """Installed models as [{"name": ..., "size_gb": ...}], newest first.
+
+        Cached briefly so the per-message availability check doesn't hit the
+        daemon every time; ``fresh=True`` (the Settings refresh) bypasses it.
+        """
+        now = asyncio.get_event_loop().time()
+        if (
+            not fresh
+            and self._models_cache is not None
+            and now - self._models_cached_at < MODEL_CACHE_TTL_S
+        ):
+            return self._models_cache
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.get(f"{self.base_url}/api/tags")
                 resp.raise_for_status()
-                models = [m.get("name", "") for m in resp.json().get("models", [])]
-                # Ollama lists names with an explicit tag (":latest" when untagged).
-                return any(m == model_name or m.split(":")[0] == model_name for m in models)
+                models = [
+                    {
+                        "name": m.get("name", ""),
+                        "size_gb": round(m.get("size", 0) / 1024**3, 1),
+                    }
+                    for m in resp.json().get("models", [])
+                    if m.get("name")
+                ]
         except httpx.HTTPError:
-            return False
+            return self._models_cache or []
+        self._models_cache = models
+        self._models_cached_at = now
+        return models
+
+    async def model_available(self, model_name: str) -> bool:
+        """Check the model exists locally. Never pulls."""
+        models = [m["name"] for m in await self.list_models()]
+        # Ollama lists names with an explicit tag (":latest" when untagged).
+        return any(m == model_name or m.split(":")[0] == model_name for m in models)
 
     async def warm_model(self, model_name: str, keep_alive: str) -> None:
         """Load the model into memory without generating anything."""
