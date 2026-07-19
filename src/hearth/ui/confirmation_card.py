@@ -51,8 +51,7 @@ class ConfirmationCard(QFrame):
         layout.addWidget(self._editor)
 
         self._error = QLabel("")
-        self._error.setProperty("muted", True)
-        self._error.setStyleSheet("color: #e08d84;")
+        self._error.setProperty("error", True)  # palette-correct in both themes
         self._error.hide()
         layout.addWidget(self._error)
 

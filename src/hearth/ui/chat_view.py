@@ -1,10 +1,11 @@
-"""Chat view: message bubbles, streaming, stop/cancel, suggestion chips, and
-inline confirmation cards."""
+"""Chat view: message bubbles, markdown rendering, streaming, stop/cancel,
+a personalized welcome state, and inline confirmation cards."""
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
@@ -22,16 +23,24 @@ from PySide6.QtWidgets import (
 
 from ..agent.gate import ApprovalRequest
 from .confirmation_card import ConfirmationCard
+from .markdown import markdown_to_html
 
+# Starters live in the welcome state and disappear once the conversation
+# begins — a quiet desk, not a wall of chips.
 SUGGESTIONS = [
     "/today",
     "Summarize my unread email",
     "What's on my calendar tomorrow?",
     "Find a free 1-hour slot this week",
     "Find a file for me",
-    "Draft a reply to my last email",
     "What time is it?",
 ]
+
+
+def _greeting(name: str) -> str:
+    hour = datetime.now().hour
+    part = "morning" if hour < 12 else "afternoon" if hour < 18 else "evening"
+    return f"Good {part}, {name}" if name else f"Good {part}"
 
 
 class _InputBox(QPlainTextEdit):
@@ -59,11 +68,13 @@ class ChatView(QWidget):
         on_send: Callable[[str, list[str]], None],
         on_stop: Callable[[], None],
         on_voice: Callable[[], None] | None = None,
+        greeting_name: str = "",
     ):
         super().__init__()
         self._on_send = on_send
         self._on_stop = on_stop
         self._on_voice = on_voice
+        self._busy = False
         self._streaming_label: QLabel | None = None
         self._streaming_text = ""
         self._pending_text = ""
@@ -89,34 +100,8 @@ class ChatView(QWidget):
         self._scroll.setWidget(canvas)
         layout.addWidget(self._scroll, stretch=1)
 
-        # Welcome empty state — replaced by the conversation on first message.
-        self._welcome: QWidget | None = QWidget()
-        welcome_box = QVBoxLayout(self._welcome)
-        welcome_box.setContentsMargins(8, 40, 8, 8)
-        greeting = QLabel("Welcome to Hearth")
-        greeting.setProperty("h1", True)
-        greeting.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sub = QLabel(
-            "Everything runs on this machine. Grant what you want in Permissions,\n"
-            "then ask below — anything that changes data will ask you first.\n"
-            "Try /today for a morning brief, or /help to list commands."
-        )
-        sub.setProperty("muted", True)
-        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        welcome_box.addWidget(greeting)
-        welcome_box.addWidget(sub)
+        self._welcome: QWidget | None = self._build_welcome(greeting_name)
         self._messages.insertWidget(0, self._welcome)
-
-        chips = QHBoxLayout()
-        chips.setSpacing(6)
-        for text in SUGGESTIONS:
-            chip = QPushButton(text)
-            chip.setProperty("chip", True)
-            chip.setCursor(Qt.CursorShape.PointingHandCursor)
-            chip.clicked.connect(lambda _=False, t=text: self._submit_text(t))
-            chips.addWidget(chip)
-        chips.addStretch(1)
-        layout.addLayout(chips)
 
         self._attach_row = QHBoxLayout()
         self._attach_row.setSpacing(6)
@@ -137,14 +122,16 @@ class ChatView(QWidget):
         input_row.setSpacing(8)
         attach = QPushButton("＋")
         attach.setProperty("secondary", True)
-        attach.setFixedWidth(40)
+        attach.setFixedSize(40, 40)
         attach.setToolTip("Attach an image or document (PDF, DOCX, text)")
+        attach.setAccessibleName("Attach a file")
         attach.clicked.connect(self._pick_attachment)
         input_row.addWidget(attach)
         self._mic = QPushButton("🎤")
         self._mic.setProperty("secondary", True)
-        self._mic.setFixedWidth(40)
+        self._mic.setFixedSize(40, 40)
         self._mic.setToolTip("Voice input — click to record, click again to transcribe")
+        self._mic.setAccessibleName("Voice input")
         if on_voice is not None:
             self._mic.clicked.connect(on_voice)
         else:
@@ -153,27 +140,67 @@ class ChatView(QWidget):
         self._input = _InputBox(self._submit)
         input_row.addWidget(self._input, stretch=1)
 
-        buttons = QVBoxLayout()
-        self._send = QPushButton("Send")
-        self._send.setObjectName("sendBtn")
-        self._send.clicked.connect(self._submit)
-        self._stop = QPushButton("Stop")
-        self._stop.setObjectName("stopBtn")
-        self._stop.clicked.connect(self._on_stop)
-        self._stop.hide()
-        buttons.addWidget(self._send)
-        buttons.addWidget(self._stop)
-        input_row.addLayout(buttons)
+        # One button that morphs: Send while idle, Stop while a turn runs.
+        self._action = QPushButton("Send")
+        self._action.setObjectName("sendBtn")
+        self._action.setAccessibleName("Send message")
+        self._action.clicked.connect(self._on_action)
+        input_row.addWidget(self._action, alignment=Qt.AlignmentFlag.AlignBottom)
         layout.addLayout(input_row)
 
+    # -- welcome state ------------------------------------------------------
+
+    def _build_welcome(self, greeting_name: str) -> QWidget:
+        welcome = QWidget()
+        box = QVBoxLayout(welcome)
+        box.setContentsMargins(8, 48, 8, 8)
+        box.setSpacing(8)
+        greeting = QLabel(_greeting(greeting_name))
+        greeting.setProperty("h1", True)
+        greeting.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sub = QLabel(
+            "Everything runs on this machine, and anything that changes data\n"
+            "asks you first. Type /help to list commands."
+        )
+        sub.setProperty("muted", True)
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        box.addWidget(greeting)
+        box.addWidget(sub)
+        box.addSpacing(12)
+        for chunk_start in range(0, len(SUGGESTIONS), 3):
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            row.addStretch(1)
+            for text in SUGGESTIONS[chunk_start : chunk_start + 3]:
+                chip = QPushButton(text)
+                chip.setProperty("chip", True)
+                chip.setCursor(Qt.CursorShape.PointingHandCursor)
+                chip.clicked.connect(lambda _=False, t=text: self._submit_text(t))
+                row.addWidget(chip)
+            row.addStretch(1)
+            box.addLayout(row)
+        return welcome
+
+    def _dismiss_welcome(self) -> None:
+        if self._welcome is not None:
+            self._messages.removeWidget(self._welcome)
+            self._welcome.deleteLater()
+            self._welcome = None
+
     # -- sending ----------------------------------------------------------
+
+    def _on_action(self) -> None:
+        if self._busy:
+            self._on_stop()
+        else:
+            self._submit()
 
     def _submit(self) -> None:
         self._submit_text(self._input.toPlainText())
 
     def _submit_text(self, text: str) -> None:
         text = text.strip()
-        if not text or not self._send.isEnabled():
+        if not text or self._busy:
             return
         self._input.clear()
         attachments = self._attachments
@@ -231,21 +258,33 @@ class ChatView(QWidget):
         self._input.setFocus()
 
     def set_busy(self, busy: bool) -> None:
-        self._send.setEnabled(not busy)
-        self._stop.setVisible(busy)
+        self._busy = busy
+        self._action.setText("Stop" if busy else "Send")
+        self._action.setAccessibleName("Stop generating" if busy else "Send message")
+        self._action.setProperty("stopMode", busy)
+        style = self._action.style()
+        style.unpolish(self._action)
+        style.polish(self._action)
 
     # -- rendering ---------------------------------------------------------
 
     MAX_RENDERED_MESSAGES = 200  # keeps day-long sessions from growing without bound
+    _SCROLL_ANCHOR_PX = 80  # how close to the bottom still counts as "following"
 
-    def _add_widget(self, widget: QWidget) -> None:
+    def _near_bottom(self) -> bool:
+        bar = self._scroll.verticalScrollBar()
+        return bar.maximum() - bar.value() <= self._SCROLL_ANCHOR_PX
+
+    def _add_widget(self, widget: QWidget, force_scroll: bool = False) -> None:
+        follow = force_scroll or self._near_bottom()
         self._messages.insertWidget(self._messages.count() - 1, widget)
         # +1 accounts for the trailing stretch item.
         while self._messages.count() > self.MAX_RENDERED_MESSAGES + 1:
             item = self._messages.takeAt(0)
             if item.widget() is not None:
                 item.widget().deleteLater()
-        QTimer.singleShot(30, self._scroll_to_bottom)
+        if follow:
+            QTimer.singleShot(30, self._scroll_to_bottom)
 
     def _scroll_to_bottom(self) -> None:
         bar = self._scroll.verticalScrollBar()
@@ -256,10 +295,23 @@ class ChatView(QWidget):
         frame.setProperty("bubble", kind)
         box = QVBoxLayout(frame)
         box.setContentsMargins(12, 8, 12, 8)
-        label = QLabel(text)
+        label = QLabel()
         label.setProperty("bubbleText", True)
         label.setWordWrap(True)
-        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        if kind == "assistant":
+            # Model output renders as markdown; the converter escapes all HTML
+            # in the input, so rich text here cannot inject markup.
+            label.setTextFormat(Qt.TextFormat.RichText)
+            label.setText(markdown_to_html(text))
+            label.setOpenExternalLinks(True)
+            label.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+                | Qt.TextInteractionFlag.LinksAccessibleByMouse
+            )
+        else:
+            label.setTextFormat(Qt.TextFormat.PlainText)
+            label.setText(text)
+            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         box.addWidget(label)
 
         row = QHBoxLayout()
@@ -271,18 +323,12 @@ class ChatView(QWidget):
             row.addStretch(1)
         holder = QWidget()
         holder.setLayout(row)
-        self._add_widget(holder)
+        self._add_widget(holder, force_scroll=(kind == "user"))
         return label
 
     def add_user_message(self, text: str) -> None:
         self._dismiss_welcome()
         self._bubble("user", text)
-
-    def _dismiss_welcome(self) -> None:
-        if self._welcome is not None:
-            self._messages.removeWidget(self._welcome)
-            self._welcome.deleteLater()
-            self._welcome = None
 
     def add_assistant_message(self, text: str) -> None:
         self._bubble("assistant", text)
@@ -323,21 +369,28 @@ class ChatView(QWidget):
         if self._pending_text:
             self._streaming_text += self._pending_text
             self._pending_text = ""
-            self._streaming_label.setText(self._streaming_text)
-            self._scroll_to_bottom()
+            self._streaming_label.setText(markdown_to_html(self._streaming_text))
+            if self._near_bottom():
+                self._scroll_to_bottom()
         elif not self._streaming_text:
             self._thinking_frame = (self._thinking_frame + 1) % len(self._THINKING_FRAMES)
-            self._streaming_label.setText(self._THINKING_FRAMES[self._thinking_frame])
+            self._streaming_label.setText(
+                markdown_to_html(self._THINKING_FRAMES[self._thinking_frame])
+            )
 
     def end_stream(self, final_text: str) -> None:
         self._flush_timer.stop()
         if self._streaming_label is not None:
             if final_text:
-                self._streaming_label.setText(final_text)
+                self._streaming_label.setText(markdown_to_html(final_text))
             elif self._streaming_text:
-                self._streaming_label.setText(self._streaming_text)
+                self._streaming_label.setText(markdown_to_html(self._streaming_text))
             else:
-                self._streaming_label.parentWidget().hide()
+                # Nothing was streamed: remove the empty bubble row entirely so
+                # it doesn't leave a blank gap in the transcript.
+                frame = self._streaming_label.parentWidget()
+                holder = frame.parentWidget() if frame is not None else None
+                (holder or frame).hide()
         self._streaming_label = None
         self._streaming_text = ""
         self._pending_text = ""
@@ -345,11 +398,12 @@ class ChatView(QWidget):
     # -- confirmation cards ---------------------------------------------------
 
     def show_confirmation(self, request: ApprovalRequest) -> asyncio.Future:
-        future = asyncio.get_event_loop().create_future()
+        future = asyncio.get_running_loop().create_future()
         card = ConfirmationCard(request, future)
         self._open_cards.append(card)
         future.add_done_callback(lambda _f: self._open_cards.remove(card))
-        self._add_widget(card)
+        # A card demands a decision — always bring it into view.
+        self._add_widget(card, force_scroll=True)
         return future
 
     def cancel_open_cards(self) -> None:

@@ -19,6 +19,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Hearth")
         self.resize(1080, 740)
+        self.setMinimumSize(760, 520)
 
         root = QWidget()
         root.setObjectName("root")

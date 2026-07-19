@@ -47,6 +47,9 @@ class HistoryView(QWidget):
         self._table.verticalHeader().hide()
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         layout.addWidget(self._table, stretch=1)
+        self._empty = QLabel("No actions yet — once Hearth uses a tool, it shows up here.")
+        self._empty.setProperty("muted", True)
+        layout.addWidget(self._empty)
         self._dirty = True
 
     def mark_dirty(self) -> None:
@@ -61,6 +64,7 @@ class HistoryView(QWidget):
     def refresh(self) -> None:
         self._dirty = False
         rows = self._db.list_actions()
+        self._empty.setVisible(not rows)
         self._table.setRowCount(len(rows))
         for i, row in enumerate(rows):
             when = datetime.fromtimestamp(row["created_at"]).strftime("%m-%d %H:%M:%S")

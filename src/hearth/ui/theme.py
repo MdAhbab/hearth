@@ -26,7 +26,7 @@ DARK = {
     "accentText": "#241c10",
     "accentDisabledBg": "#4a4137",
     "accentDisabledText": "#857a6b",
-    "bubbleUser": "#33405a",
+    "bubbleUser": "#3d3323",
     "bubbleAssistant": "#262220",
     "confirmBg": "#2b2117",
     "confirmInner": "#1b1815",
@@ -59,7 +59,7 @@ LIGHT = {
     "accentText": "#ffffff",
     "accentDisabledBg": "#d9d0c1",
     "accentDisabledText": "#a49a89",
-    "bubbleUser": "#dce6f5",
+    "bubbleUser": "#f2e4c8",
     "bubbleAssistant": "#f0ebe2",
     "confirmBg": "#fdf3e2",
     "confirmInner": "#ffffff",
@@ -140,10 +140,8 @@ QPushButton#sendBtn {{
 }}
 QPushButton#sendBtn:hover {{ background: {accentHover}; }}
 QPushButton#sendBtn:disabled {{ background: {accentDisabledBg}; color: {accentDisabledText}; }}
-QPushButton#stopBtn {{
-    background: {reject}; color: white; border: none; border-radius: 10px;
-    padding: 10px 18px; font-weight: 600;
-}}
+QPushButton#sendBtn[stopMode="true"] {{ background: {reject}; color: white; }}
+QPushButton#sendBtn[stopMode="true"]:hover {{ background: {rejectHover}; }}
 
 QPushButton[chip="true"] {{
     background: {bgChip}; color: {textSoft}; border: 1px solid {borderInput};
@@ -154,6 +152,7 @@ QPushButton[chip="true"]:hover {{ border-color: {accent}; color: {accent}; }}
 QLabel[h1="true"] {{ color: {text}; font-size: 20px; font-weight: 700; }}
 QLabel[h2="true"] {{ color: {textSoft}; font-size: 15px; font-weight: 600; }}
 QLabel[muted="true"] {{ color: {textMuted}; font-size: 12px; }}
+QLabel[error="true"] {{ color: {error}; font-size: 12px; }}
 
 QFrame[card="true"] {{
     background: {bgCard}; border: 1px solid {border}; border-radius: 12px;
@@ -202,4 +201,40 @@ def resolve_mode(preference: str, qt_app) -> str:
 
 
 def apply_theme(qt_app, preference: str) -> None:
-    qt_app.setStyleSheet(stylesheet(resolve_mode(preference, qt_app)))
+    mode = resolve_mode(preference, qt_app)
+    qt_app.setStyleSheet(stylesheet(mode))
+    # Links inside rich-text labels take their color from the palette, not QSS.
+    from PySide6.QtGui import QColor, QPalette
+
+    palette = qt_app.palette()
+    palette.setColor(
+        QPalette.ColorRole.Link, QColor((LIGHT if mode == "light" else DARK)["accent"])
+    )
+    qt_app.setPalette(palette)
+
+
+def app_icon():
+    """Programmatic app icon: a warm rounded square with an 'H' — gives the
+    window, taskbar, and tray an identity without shipping image assets."""
+    from PySide6.QtCore import QRectF, Qt
+    from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
+
+    icon = QIcon()
+    for size in (16, 24, 32, 48, 64, 128, 256):
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(DARK["accent"]))
+        radius = size * 0.22
+        painter.drawRoundedRect(QRectF(0, 0, size, size), radius, radius)
+        painter.setPen(QColor(DARK["accentText"]))
+        font = QFont()
+        font.setBold(True)
+        font.setPixelSize(int(size * 0.62))
+        painter.setFont(font)
+        painter.drawText(QRectF(0, -size * 0.04, size, size), Qt.AlignmentFlag.AlignCenter, "H")
+        painter.end()
+        icon.addPixmap(pixmap)
+    return icon
