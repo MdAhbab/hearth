@@ -85,7 +85,7 @@ QPushButton[nav="true"] {{
 QPushButton[nav="true"]:hover {{ background: {bgHover}; color: {text}; }}
 QPushButton[nav="true"][active="true"] {{ background: {bgNavActive}; color: {accent}; }}
 
-QLabel#appTitle {{ color: {accent}; font-size: 19px; font-weight: 700; padding: 14px; }}
+QLabel#appTitle {{ color: {accent}; font-size: 19px; font-weight: 700; }}
 QLabel#statusPill {{
     color: {textMuted}; font-size: 12px; padding: 4px 10px;
     border: 1px solid {border}; border-radius: 10px; background: {bgTool};
@@ -94,13 +94,24 @@ QLabel#statusPill {{
 QScrollArea {{ border: none; background: transparent; }}
 QWidget#chatCanvas {{ background: {bg}; }}
 
-QFrame[bubble="user"] {{ background: {bubbleUser}; border-radius: 12px; padding: 4px; }}
-QFrame[bubble="assistant"] {{ background: {bubbleAssistant}; border-radius: 12px; padding: 4px; }}
-QFrame[bubble="tool"] {{
-    background: {bgTool}; border: 1px solid {border}; border-radius: 10px;
-}}
+QScrollBar:vertical {{ background: transparent; width: 8px; margin: 0; }}
+QScrollBar::handle:vertical {{ background: {border}; border-radius: 4px; min-height: 40px; }}
+QScrollBar::handle:vertical:hover {{ background: {borderInput}; }}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
+QScrollBar:horizontal {{ background: transparent; height: 8px; margin: 0; }}
+QScrollBar::handle:horizontal {{ background: {border}; border-radius: 4px; min-width: 40px; }}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{ width: 0; }}
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: transparent; }}
+
+/* The user speaks in a compact warm bubble; the assistant answers as open
+   text on the canvas — an editorial page, not a template chat app. */
+QFrame[bubble="user"] {{ background: {bubbleUser}; border-radius: 14px; }}
+QFrame[bubble="assistant"] {{ background: transparent; }}
+QFrame[bubble="tool"] {{ background: transparent; border: none; }}
 QLabel[bubbleText="true"] {{ color: {text}; font-size: 14px; }}
-QLabel[bubbleMeta="true"] {{ color: {textMeta}; font-size: 11px; }}
+QLabel[bubbleMeta="true"] {{ color: {textMeta}; font-size: 11px; font-style: italic; }}
+QLabel[hero="true"] {{ color: {text}; font-size: 26px; font-weight: 700; }}
 
 QFrame#confirmCard {{
     background: {confirmBg}; border: 1px solid {accent}; border-radius: 12px;
@@ -132,8 +143,9 @@ QPushButton[voiceRecording="true"], QPushButton[voiceRecording="true"]:hover {{
 
 QPlainTextEdit#chatInput {{
     background: {bgInput}; color: {text}; border: 1px solid {borderInput};
-    border-radius: 12px; padding: 10px; font-size: 14px;
+    border-radius: 14px; padding: 11px; font-size: 14px;
 }}
+QPlainTextEdit#chatInput:focus {{ border: 1px solid {accent}; }}
 QPushButton#sendBtn {{
     background: {accent}; color: {accentText}; border: none; border-radius: 10px;
     padding: 10px 22px; font-weight: 700; font-size: 14px;
@@ -213,28 +225,48 @@ def apply_theme(qt_app, preference: str) -> None:
     qt_app.setPalette(palette)
 
 
+def flame_pixmap(size: int):
+    """The Hearth flame, drawn with QPainter — the one logo used everywhere
+    (app icon, tray, sidebar, welcome hero). No image assets to ship."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPixmap
+
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    s = float(size)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+
+    outer = QPainterPath()
+    outer.moveTo(0.50 * s, 0.94 * s)
+    outer.cubicTo(0.20 * s, 0.94 * s, 0.10 * s, 0.66 * s, 0.26 * s, 0.46 * s)
+    outer.cubicTo(0.34 * s, 0.36 * s, 0.44 * s, 0.30 * s, 0.40 * s, 0.10 * s)
+    outer.cubicTo(0.56 * s, 0.16 * s, 0.52 * s, 0.28 * s, 0.62 * s, 0.38 * s)
+    outer.cubicTo(0.74 * s, 0.48 * s, 0.84 * s, 0.62 * s, 0.78 * s, 0.74 * s)
+    outer.cubicTo(0.72 * s, 0.88 * s, 0.62 * s, 0.94 * s, 0.50 * s, 0.94 * s)
+    gradient = QLinearGradient(0, 0.08 * s, 0, 0.95 * s)
+    gradient.setColorAt(0.0, QColor("#ffd685"))
+    gradient.setColorAt(0.55, QColor("#f4a04c"))
+    gradient.setColorAt(1.0, QColor("#e0662e"))
+    painter.fillPath(outer, gradient)
+
+    inner = QPainterPath()
+    inner.moveTo(0.50 * s, 0.88 * s)
+    inner.cubicTo(0.36 * s, 0.88 * s, 0.31 * s, 0.72 * s, 0.41 * s, 0.60 * s)
+    inner.cubicTo(0.47 * s, 0.53 * s, 0.50 * s, 0.47 * s, 0.50 * s, 0.40 * s)
+    inner.cubicTo(0.55 * s, 0.50 * s, 0.62 * s, 0.56 * s, 0.64 * s, 0.66 * s)
+    inner.cubicTo(0.67 * s, 0.79 * s, 0.61 * s, 0.88 * s, 0.50 * s, 0.88 * s)
+    painter.fillPath(inner, QColor("#fff2d2"))
+    painter.end()
+    return pixmap
+
+
 def app_icon():
-    """Programmatic app icon: a warm rounded square with an 'H' — gives the
-    window, taskbar, and tray an identity without shipping image assets."""
-    from PySide6.QtCore import QRectF, Qt
-    from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap
+    """Programmatic app icon built from the flame glyph."""
+    from PySide6.QtGui import QIcon
 
     icon = QIcon()
     for size in (16, 24, 32, 48, 64, 128, 256):
-        pixmap = QPixmap(size, size)
-        pixmap.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(DARK["accent"]))
-        radius = size * 0.22
-        painter.drawRoundedRect(QRectF(0, 0, size, size), radius, radius)
-        painter.setPen(QColor(DARK["accentText"]))
-        font = QFont()
-        font.setBold(True)
-        font.setPixelSize(int(size * 0.62))
-        painter.setFont(font)
-        painter.drawText(QRectF(0, -size * 0.04, size, size), Qt.AlignmentFlag.AlignCenter, "H")
-        painter.end()
-        icon.addPixmap(pixmap)
+        icon.addPixmap(flame_pixmap(size))
     return icon

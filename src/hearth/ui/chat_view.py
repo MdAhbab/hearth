@@ -89,14 +89,23 @@ class ChatView(QWidget):
         layout.setContentsMargins(18, 12, 18, 14)
         layout.setSpacing(10)
 
+        # The conversation lives in a centered, width-capped column — an
+        # editorial page rather than text stretched across a wide window.
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         canvas = QWidget()
         canvas.setObjectName("chatCanvas")
-        self._messages = QVBoxLayout(canvas)
-        self._messages.setContentsMargins(4, 8, 4, 8)
-        self._messages.setSpacing(10)
+        canvas_row = QHBoxLayout(canvas)
+        canvas_row.setContentsMargins(0, 0, 0, 0)
+        column = QWidget()
+        column.setMaximumWidth(860)
+        self._messages = QVBoxLayout(column)
+        self._messages.setContentsMargins(4, 10, 4, 10)
+        self._messages.setSpacing(12)
         self._messages.addStretch(1)
+        canvas_row.addStretch(1)
+        canvas_row.addWidget(column, stretch=1000)
+        canvas_row.addStretch(1)
         self._scroll.setWidget(canvas)
         layout.addWidget(self._scroll, stretch=1)
 
@@ -151,12 +160,18 @@ class ChatView(QWidget):
     # -- welcome state ------------------------------------------------------
 
     def _build_welcome(self, greeting_name: str) -> QWidget:
+        from .theme import flame_pixmap
+
         welcome = QWidget()
         box = QVBoxLayout(welcome)
-        box.setContentsMargins(8, 48, 8, 8)
+        box.setContentsMargins(8, 42, 8, 8)
         box.setSpacing(8)
+        hearth_mark = QLabel()
+        hearth_mark.setPixmap(flame_pixmap(46))
+        hearth_mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        box.addWidget(hearth_mark)
         greeting = QLabel(_greeting(greeting_name))
-        greeting.setProperty("h1", True)
+        greeting.setProperty("hero", True)
         greeting.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sub = QLabel(
             "Everything runs on this machine, and anything that changes data\n"
@@ -294,13 +309,13 @@ class ChatView(QWidget):
         frame = QFrame()
         frame.setProperty("bubble", kind)
         box = QVBoxLayout(frame)
-        box.setContentsMargins(12, 8, 12, 8)
         label = QLabel()
         label.setProperty("bubbleText", True)
         label.setWordWrap(True)
         if kind == "assistant":
             # Model output renders as markdown; the converter escapes all HTML
             # in the input, so rich text here cannot inject markup.
+            box.setContentsMargins(2, 2, 2, 2)
             label.setTextFormat(Qt.TextFormat.RichText)
             label.setText(markdown_to_html(text))
             label.setOpenExternalLinks(True)
@@ -309,18 +324,31 @@ class ChatView(QWidget):
                 | Qt.TextInteractionFlag.LinksAccessibleByMouse
             )
         else:
+            box.setContentsMargins(13, 9, 13, 9)
             label.setTextFormat(Qt.TextFormat.PlainText)
             label.setText(text)
             label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            # A wrap-enabled label reports a tiny minimum width and gets
+            # squeezed; hold it at its natural text width up to the cap so
+            # short messages hug and long ones wrap. Polish first so the
+            # metrics use the stylesheet font, not the default one.
+            from PySide6.QtGui import QFontMetrics
+
+            label.ensurePolished()
+            natural = QFontMetrics(label.font()).size(0, text).width()
+            label.setMinimumWidth(min(natural + 8, 590))
         box.addWidget(label)
 
         row = QHBoxLayout()
         if kind == "user":
+            # Right-aligned bubble that hugs short messages and wraps long
+            # ones; the assistant answers as open text spanning the column,
+            # like a page rather than a chat template.
+            frame.setMaximumWidth(620)
             row.addStretch(1)
-            row.addWidget(frame, stretch=4)
+            row.addWidget(frame)
         else:
-            row.addWidget(frame, stretch=4)
-            row.addStretch(1)
+            row.addWidget(frame)
         holder = QWidget()
         holder.setLayout(row)
         self._add_widget(holder, force_scroll=(kind == "user"))
@@ -337,9 +365,10 @@ class ChatView(QWidget):
         frame = QFrame()
         frame.setProperty("bubble", "tool")
         box = QHBoxLayout(frame)
-        box.setContentsMargins(10, 5, 10, 5)
+        box.setContentsMargins(10, 2, 10, 2)
         label = QLabel(text)
         label.setProperty("bubbleMeta", True)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         box.addWidget(label)
         self._add_widget(frame)
 

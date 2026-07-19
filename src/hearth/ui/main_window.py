@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .theme import flame_pixmap
+
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -34,9 +36,18 @@ class MainWindow(QMainWindow):
         side.setContentsMargins(8, 6, 8, 12)
         side.setSpacing(2)
 
+        brand = QWidget()
+        brand_row = QHBoxLayout(brand)
+        brand_row.setContentsMargins(14, 14, 14, 10)
+        brand_row.setSpacing(8)
+        logo = QLabel()
+        logo.setPixmap(flame_pixmap(22))
         title = QLabel("Hearth")
         title.setObjectName("appTitle")
-        side.addWidget(title)
+        brand_row.addWidget(logo)
+        brand_row.addWidget(title)
+        brand_row.addStretch(1)
+        side.addWidget(brand)
 
         self._stack = QStackedWidget()
         self._nav_buttons: list[QPushButton] = []
