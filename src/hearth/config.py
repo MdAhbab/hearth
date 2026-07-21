@@ -35,7 +35,10 @@ class ModelConfig(BaseModel):
     # and are always labeled in the UI; local stays the default.
     provider: str = "ollama"
     name: str = "gemma4:e2b"
-    context_length: int = 4096
+    # Floor for the model's context window. The provider raises it per-request
+    # when the tool schemas + prompt would otherwise overflow (they run to
+    # several thousand tokens on their own), so tool calls never truncate.
+    context_length: int = 8192
     max_agent_steps: int = 6
     keep_alive: str = "5m"
 

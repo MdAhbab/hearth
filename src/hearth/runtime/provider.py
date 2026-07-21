@@ -25,6 +25,15 @@ from ..config import ModelConfig, OllamaConfig
 
 log = logging.getLogger(__name__)
 
+# Ollama silently drops tokens past num_ctx from the *front* of the prompt, so
+# an undersized window quietly truncates the system prompt and tool results and
+# the model then answers with nonsense or nothing. The tool schemas alone can
+# run to several thousand tokens, so we never send a window smaller than the
+# prompt plus room to answer — raising it above the configured size if needed.
+_RESPONSE_HEADROOM_TOKENS = 1024
+_MAX_NUM_CTX = 32768
+_CHARS_PER_TOKEN = 4  # coarse estimate; this is a guard, not a real tokenizer
+
 
 @dataclass
 class ChatMessage:
@@ -162,6 +171,32 @@ class OllamaProvider:
             return [merged, *messages[1:]]
         return [ChatMessage("system", instructions), *messages]
 
+    def _effective_num_ctx(
+        self, messages: list[ChatMessage], tools: list[dict[str, Any]] | None
+    ) -> int:
+        """Configured context window, raised so tools+prompt can't overflow it.
+
+        Sizes from text only — image bytes don't map to text tokens — and always
+        leaves room for the reply, capped at ``_MAX_NUM_CTX``. Returns the
+        configured value unchanged when the prompt already fits.
+        """
+        chars = sum(len(m.content) for m in messages)
+        for m in messages:
+            for call in m.tool_calls:
+                chars += len(call.name) + len(json.dumps(call.arguments, default=str))
+        if tools:
+            chars += len(json.dumps(tools, default=str))
+        needed = chars // _CHARS_PER_TOKEN + _RESPONSE_HEADROOM_TOKENS
+        effective = min(max(self._model.context_length, needed), _MAX_NUM_CTX)
+        if effective > self._model.context_length:
+            log.info(
+                "Raising num_ctx %d -> %d so tools+prompt fit (~%d prompt tokens)",
+                self._model.context_length,
+                effective,
+                chars // _CHARS_PER_TOKEN,
+            )
+        return effective
+
     async def _request(
         self,
         messages: list[ChatMessage],
@@ -173,7 +208,7 @@ class OllamaProvider:
             "messages": self._to_wire(messages),
             "stream": True,
             "keep_alive": self._model.keep_alive,
-            "options": {"num_ctx": self._model.context_length},
+            "options": {"num_ctx": self._effective_num_ctx(messages, tools)},
         }
         if tools:
             payload["tools"] = tools

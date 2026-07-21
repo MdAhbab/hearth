@@ -13,7 +13,7 @@
 # writes both fields for you.
 provider = "ollama"
 name = "gemma4:e2b"        # switch to "gemma4:e4b" on a 16 GB+ machine
-context_length = 4096
+context_length = 8192      # floor; Hearth raises it per-request so the tool schemas never overflow
 max_agent_steps = 6
 keep_alive = "5m"          # how long Ollama keeps the model in memory after a request
 

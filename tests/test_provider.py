@@ -103,6 +103,52 @@ async def test_server_error_surfaces():
         await provider.chat([ChatMessage("user", "hi")])
 
 
+def _capture_num_ctx_handler(captured):
+    def handler(request):
+        payload = json.loads(request.content)
+        captured["num_ctx"] = payload["options"]["num_ctx"]
+        return httpx.Response(200, text=ndjson({"message": {"content": "ok"}, "done": True}))
+
+    return handler
+
+
+async def test_num_ctx_uses_configured_when_prompt_fits():
+    captured = {}
+    provider = OllamaProvider(
+        ModelConfig(context_length=8192),
+        OllamaConfig(),
+        transport=httpx.MockTransport(_capture_num_ctx_handler(captured)),
+    )
+    await provider.chat([ChatMessage("user", "hi")])
+    assert captured["num_ctx"] == 8192
+
+
+async def test_num_ctx_bumped_so_large_tools_do_not_overflow():
+    captured = {}
+    # Tool schemas far larger than the configured window (~10k tokens of text).
+    tools = [{"type": "function", "function": {"name": "big", "description": "x" * 40000}}]
+    provider = OllamaProvider(
+        ModelConfig(context_length=4096),
+        OllamaConfig(),
+        transport=httpx.MockTransport(_capture_num_ctx_handler(captured)),
+    )
+    await provider.chat([ChatMessage("user", "hi")], tools=tools)
+    assert captured["num_ctx"] > 4096  # would have truncated the prompt otherwise
+    assert captured["num_ctx"] <= 32768
+
+
+async def test_num_ctx_capped_at_max():
+    captured = {}
+    tools = [{"type": "function", "function": {"name": "huge", "description": "x" * 400000}}]
+    provider = OllamaProvider(
+        ModelConfig(context_length=4096),
+        OllamaConfig(),
+        transport=httpx.MockTransport(_capture_num_ctx_handler(captured)),
+    )
+    await provider.chat([ChatMessage("user", "hi")], tools=tools)
+    assert captured["num_ctx"] == 32768
+
+
 def test_parse_json_tool_call_variants():
     ok = _parse_json_tool_call('{"tool_call": {"name": "t", "arguments": {"a": 1}}}')
     assert ok and ok.name == "t" and ok.arguments == {"a": 1}
