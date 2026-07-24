@@ -11,14 +11,24 @@
 from __future__ import annotations
 
 import ast
+import asyncio
+import ipaddress
 import operator
 import re
+import socket
 from datetime import datetime
 
 import httpx
 from pydantic import BaseModel, Field, HttpUrl
 
-from ...agent.tools import RiskLevel, ToolRegistry, ToolResult, ToolSpec
+from ...agent.tools import (
+    RiskLevel,
+    ToolRegistry,
+    ToolResult,
+    ToolSpec,
+    authorized_local_resources,
+)
+from ...assurance import LOCAL_ZONES, canonical_url, classify_host
 from ...config import WebConfig
 
 
@@ -85,6 +95,98 @@ def html_to_text(html: str) -> str:
     return _WS_RE.sub("\n", text).strip()
 
 
+_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+
+
+async def _validate_web_target(url: httpx.URL) -> None:
+    target = canonical_url(str(url))
+    zone = target.attributes.get("zone")
+    if zone in LOCAL_ZONES and target.canonical_id not in authorized_local_resources():
+        raise ValueError(
+            f"local/private/link-local web target is not exactly user-authorized: "
+            f"{target.canonical_id}"
+        )
+    if zone != "public":
+        return
+    host = target.attributes.get("host", "")
+    port = int(target.attributes.get("port") or (443 if url.scheme == "https" else 80))
+    infos = await asyncio.to_thread(
+        socket.getaddrinfo, host, port, type=socket.SOCK_STREAM
+    )
+    for info in infos:
+        address = str(info[4][0]).split("%", 1)[0]
+        if classify_host(address) in LOCAL_ZONES:
+            raise ValueError(f"public hostname resolved to a local/private peer: {address}")
+
+
+def _host_key(url: httpx.URL) -> str:
+    """Scheme + host + port identity used to detect cross-host redirects."""
+    target = canonical_url(str(url))
+    host = str(target.attributes.get("host") or "")
+    port = str(target.attributes.get("port") or "")
+    scheme = str(target.attributes.get("scheme") or url.scheme or "")
+    return f"{scheme}://{host}:{port}"
+
+
+def _validate_final_peer(response: httpx.Response) -> None:
+    """Fail closed unless the connected peer can be proven non-local (or authorized)."""
+    stream = response.extensions.get("network_stream")
+    if stream is None or not hasattr(stream, "get_extra_info"):
+        raise ValueError(
+            "final peer identity unavailable; refusing fetch without connected-peer proof"
+        )
+    peer = stream.get_extra_info("server_addr")
+    if not peer:
+        raise ValueError("final peer address missing; refusing fetch without peer proof")
+    address = str(peer[0] if isinstance(peer, tuple) else peer).split("%", 1)[0]
+    try:
+        ipaddress.ip_address(address)
+    except ValueError as exc:
+        raise ValueError(f"final peer address is not a usable IP: {address}") from exc
+    if classify_host(address) in LOCAL_ZONES:
+        target = canonical_url(str(response.url))
+        if target.canonical_id not in authorized_local_resources():
+            raise ValueError(f"final connected peer is local/private/link-local: {address}")
+
+
+async def fetch_with_validated_redirects(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    max_redirects: int = 5,
+    pinned_host_key: str | None = None,
+) -> httpx.Response:
+    """Fetch without automatic redirects, validating every hop and final peer.
+
+    Cross-host redirects are refused so the sealed request identity cannot be
+    silently swapped for a different public peer. Same-host redirects remain
+    allowed after per-hop and final-peer checks.
+    """
+    current = httpx.URL(url)
+    origin_key = pinned_host_key or _host_key(current)
+    for hop in range(max_redirects + 1):
+        if _host_key(current) != origin_key:
+            raise ValueError(
+                "cross-host redirect refused: final peer must stay on the sealed host"
+            )
+        await _validate_web_target(current)
+        response = await client.get(current, follow_redirects=False)
+        _validate_final_peer(response)
+        if response.status_code not in _REDIRECT_STATUSES:
+            if _host_key(response.url) != origin_key:
+                raise ValueError(
+                    "final response host drifted from the sealed request identity"
+                )
+            return response
+        location = response.headers.get("location")
+        if not location:
+            raise ValueError("redirect response omitted Location")
+        if hop >= max_redirects:
+            raise ValueError("too many redirects")
+        current = response.url.join(location)
+    raise ValueError("too many redirects")
+
+
 def register_utility_tools(registry: ToolRegistry, web_config: WebConfig) -> None:
     async def time_now(_: TimeNowParams) -> ToolResult:
         now = datetime.now().astimezone()
@@ -108,12 +210,11 @@ def register_utility_tools(registry: ToolRegistry, web_config: WebConfig) -> Non
         try:
             async with httpx.AsyncClient(
                 timeout=web_config.fetch_timeout_s,
-                follow_redirects=True,
                 headers={"User-Agent": "Hearth/0.1 (personal local assistant)"},
             ) as client:
-                resp = await client.get(str(p.url))
+                resp = await fetch_with_validated_redirects(client, str(p.url))
                 resp.raise_for_status()
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, OSError, ValueError) as exc:
             return ToolResult(ok=False, error=f"Fetch failed: {exc}")
         body = resp.text[: web_config.max_fetch_bytes]
         content_type = resp.headers.get("content-type", "")

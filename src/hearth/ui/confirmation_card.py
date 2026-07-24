@@ -22,6 +22,38 @@ from PySide6.QtWidgets import (
 from ..agent.gate import ApprovalRequest, ApprovalResponse
 
 
+def _intentseal_summary(request: ApprovalRequest) -> str:
+    """A compact, human-readable summary of why IntentSeal is asking.
+
+    Shows the trusted context a habituated 'Approve' click would otherwise
+    skip: the escalation reason, the canonical target, who the effect reaches,
+    what data would leave the machine, and whether it can be undone.
+    """
+    lines: list[str] = []
+    if request.intent_confirmation:
+        lines.append(f"Confirm turn intent: {request.intent_goal}")
+        identity = request.principal
+        if request.account:
+            identity += f" · {request.account}"
+        if identity:
+            lines.append(f"Acting as: {identity}")
+    reason = request.escalation or (request.reasons[0] if request.reasons else "")
+    if reason:
+        lines.append(f"IntentSeal · {request.decision} — {reason}")
+    if request.canonical_target:
+        lines.append(f"Target: {request.canonical_target}")
+    if request.audience:
+        lines.append(f"Recipients: {', '.join(request.audience)}")
+    if request.data_out:
+        lines.append(f"Data leaving the machine: {', '.join(request.data_out)}")
+    if request.redact_fields:
+        lines.append(f"Will strip protected fields: {', '.join(request.redact_fields)}")
+    if request.provenance:
+        lines.append(f"Sources: {', '.join(request.provenance[:4])}")
+    lines.append("Reversible: yes" if request.reversible else "Reversible: NO — cannot be undone")
+    return "\n".join(lines)
+
+
 class ConfirmationCard(QFrame):
     def __init__(self, request: ApprovalRequest, future: asyncio.Future, parent=None):
         super().__init__(parent)
@@ -33,11 +65,23 @@ class ConfirmationCard(QFrame):
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(8)
 
-        title = QLabel(f"Approval needed — {request.tool}")
+        prefix = "Confirm intent" if request.intent_confirmation else "Approval needed"
+        title = QLabel(f"{prefix} — {request.tool}")
         title.setObjectName("confirmTitle")
         layout.addWidget(title)
 
-        self._preview = QPlainTextEdit(request.preview)
+        details = _intentseal_summary(request)
+        if details:
+            summary = QLabel(details)
+            summary.setObjectName("confirmProvenance")
+            summary.setWordWrap(True)
+            summary.setProperty("muted", True)
+            layout.addWidget(summary)
+
+        preview = request.preview
+        if request.semantic_diff:
+            preview = f"{preview}\n\nStaged semantic diff:\n{request.semantic_diff}"
+        self._preview = QPlainTextEdit(preview)
         self._preview.setObjectName("confirmPreview")
         self._preview.setReadOnly(True)
         self._preview.setMinimumHeight(90)

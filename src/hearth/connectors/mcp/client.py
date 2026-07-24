@@ -9,6 +9,7 @@ an SDK; the protocol surface used here is tiny and stable.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from typing import Any
@@ -37,6 +38,15 @@ class MCPServerConnection:
         self.tools: list[dict[str, Any]] = []
 
     @property
+    def server_identity(self) -> str:
+        raw = json.dumps(
+            {"name": self.name, "command": self._command, "args": self._args},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return f"mcp:{self.name}:{hashlib.sha256(raw.encode()).hexdigest()}"
+
+    @property
     def running(self) -> bool:
         return self._process is not None and self._process.returncode is None
 
@@ -61,9 +71,13 @@ class MCPServerConnection:
             },
         )
         await self._notify("notifications/initialized", {})
-        listing = await self._request("tools/list", {})
-        self.tools = listing.get("tools", [])
+        self.tools = await self.list_tools()
         log.info("MCP server '%s' exposes %d tools", self.name, len(self.tools))
+
+    async def list_tools(self) -> list[dict[str, Any]]:
+        listing = await self._request("tools/list", {})
+        tools = listing.get("tools", [])
+        return tools if isinstance(tools, list) else []
 
     async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         return await self._request("tools/call", {"name": tool_name, "arguments": arguments})

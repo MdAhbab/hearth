@@ -14,10 +14,18 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon
 
-from .agent.gate import ActionGate, ApprovalRequest, ApprovalResponse
+from .agent.gate import ActionGate, ApprovalRequest, ApprovalResponse, DbSealStore
 from .agent.loop import AgentEvent, AgentLoop
 from .agent.prompts import build_system_prompt
 from .agent.tools import ToolRegistry
+from .assurance import (
+    EffectAdapterRegistry,
+    IntentSeal,
+    PolicyConfig,
+    Principal,
+    get_or_create_key,
+    register_builtin_adapters,
+)
 from .attachments import extract_document, frame_document
 from .config import Config, app_data_dir
 from .connectors.calendar import make_calendar_store, register_calendar_tools
@@ -123,9 +131,28 @@ class HearthApp:
         self._tray = QSystemTrayIcon(icon, self._qt)
         self._tray.show()
 
+        # IntentSeal: the deterministic, provenance-bound capability monitor.
+        # One instance, one verification path. Its signing key lives in the OS
+        # credential store; spent one-use nonces persist in SQLite so a seal
+        # cannot be replayed across restarts. Full policy is active, but the
+        # gate still confirms every WRITE tool (legacy semantics) until tests
+        # justify a narrower policy.
+        self.effects = EffectAdapterRegistry()
+        register_builtin_adapters(self.effects)
+        self.intentseal = IntentSeal(
+            key=get_or_create_key(self.secrets),
+            config=PolicyConfig.full(),
+            seal_store=DbSealStore(self.db),
+        )
+
         # gate + agent (approval cards live in the chat view)
         self.gate = ActionGate(
-            self.db, self.registry, self.permissions.check, self._request_approval
+            self.db,
+            self.registry,
+            self.permissions.check,
+            self._request_approval,
+            intentseal=self.intentseal,
+            effects=self.effects,
         )
         self._system_prompt = build_system_prompt(self.config.user.name, self.config.user.about)
         self.agent = AgentLoop(
@@ -134,6 +161,7 @@ class HearthApp:
             self.gate,
             max_steps=self.config.model.max_agent_steps,
             system_prompt=self._system_prompt,
+            principal_provider=self._current_principal,
         )
 
         self.skills = SkillLibrary()
@@ -176,6 +204,16 @@ class HearthApp:
 
     def _notify(self, title: str, message: str) -> None:
         self._tray.showMessage(title, message)
+
+    def _current_principal(self) -> Principal:
+        metadata = self.db.get_connector_metadata("gmail")
+        email = str(metadata.get("email", "")).strip().lower()
+        account = f"gmail:{email}" if email else "local"
+        return Principal(
+            user_id="local-user",
+            account=account,
+            display_name=self.config.user.name,
+        )
 
     def _capture_screen(self) -> str:
         from .images import ImageError, encode_qimage
@@ -228,6 +266,7 @@ class HearthApp:
             self.gate,
             max_steps=config.model.max_agent_steps,
             system_prompt=self._system_prompt,
+            principal_provider=self._current_principal,
         )
         self.window.set_status(f"Model: {self._model_label()} — ready")
 
@@ -281,7 +320,7 @@ class HearthApp:
         try:
             # Encoding a photo or extracting a 40-page PDF takes seconds; do it
             # off the UI thread (QImage, unlike QPixmap, is thread-safe).
-            images, doc_blocks, failures = await asyncio.to_thread(
+            images, doc_blocks, attachment_evidence, failures = await asyncio.to_thread(
                 _process_attachments, attachment_paths or []
             )
             for note in failures:
@@ -292,6 +331,22 @@ class HearthApp:
             agent, model_label = await self._pick_agent()
             if agent is None:
                 return  # _pick_agent already told the user why
+            if self.config.model.provider == "ollama" and agent is not self.agent:
+                consented = await self.gate.confirm_cloud_egress(
+                    trusted_text=display_text,
+                    untrusted_content=attachment_evidence,
+                    history_messages=[
+                        (message.role, message.content) for message in self._history
+                    ],
+                    resource=model_label,
+                    principal=self._current_principal(),
+                    conversation_id=self.conversation_id,
+                )
+                if not consented:
+                    self.chat.add_assistant_message(
+                        "Cloud fallback was not authorized, so no local content left this Mac."
+                    )
+                    return
 
             self.window.set_status(f"Model: {model_label} — thinking…")
             self.chat.begin_stream()
@@ -307,7 +362,13 @@ class HearthApp:
             async with self.runtime.generation_lock:
                 try:
                     answer = await agent.run(
-                        list(self._history), text, on_event, self.conversation_id, images=images
+                        list(self._history),
+                        text,
+                        on_event,
+                        self.conversation_id,
+                        images=images,
+                        trusted_user_text=display_text,
+                        attachment_evidence=attachment_evidence,
                     )
                 except asyncio.CancelledError:
                     raise
@@ -316,6 +377,23 @@ class HearthApp:
                     if not chain:
                         raise
                     log.warning("Local turn failed (%s); retrying via cloud fallback", exc)
+                    consented = await self.gate.confirm_cloud_egress(
+                        trusted_text=display_text,
+                        untrusted_content=attachment_evidence,
+                        history_messages=[
+                            (message.role, message.content) for message in self._history
+                        ],
+                        resource=f"{chain[0].label} (cloud)",
+                        principal=self._current_principal(),
+                        conversation_id=self.conversation_id,
+                    )
+                    if not consented:
+                        self.chat.end_stream("")
+                        self.chat.add_assistant_message(
+                            "The local model failed, and cloud fallback was not authorized. "
+                            "No local content was sent."
+                        )
+                        return
                     self.chat.end_stream("")
                     agent, model_label = self._make_cloud_agent(chain)
                     self.chat.add_tool_note(
@@ -324,7 +402,13 @@ class HearthApp:
                     self.window.set_status(f"Model: {model_label} — thinking…")
                     self.chat.begin_stream()
                     answer = await agent.run(
-                        list(self._history), text, on_event, self.conversation_id, images=images
+                        list(self._history),
+                        text,
+                        on_event,
+                        self.conversation_id,
+                        images=images,
+                        trusted_user_text=display_text,
+                        attachment_evidence=attachment_evidence,
                     )
 
             self.chat.end_stream(answer)
@@ -446,6 +530,7 @@ class HearthApp:
             self.gate,
             max_steps=self.config.model.max_agent_steps,
             system_prompt=self._system_prompt,
+            principal_provider=self._current_principal,
         )
 
     # -- voice input -------------------------------------------------------------
@@ -547,7 +632,9 @@ class HearthApp:
         self.db.close()
 
 
-def _process_attachments(paths: list[str]) -> tuple[list[str], list[str], list[str]]:
+def _process_attachments(
+    paths: list[str],
+) -> tuple[list[str], list[str], list[tuple[str, object]], list[str]]:
     """Encode images / extract documents for one turn. Runs in a worker thread.
 
     Returns (base64 images, framed document blocks, user-facing failure notes);
@@ -557,17 +644,21 @@ def _process_attachments(paths: list[str]) -> tuple[list[str], list[str], list[s
 
     images: list[str] = []
     doc_blocks: list[str] = []
+    evidence: list[tuple[str, object]] = []
     failures: list[str] = []
     for path in paths:
         name = Path(path).name
         try:
             if is_image_path(path):
                 images.append(encode_image_file(path))
+                evidence.append((name, {"image": "local image attachment"}))
             else:
-                doc_blocks.append(frame_document(extract_document(path)))
+                doc = extract_document(path)
+                doc_blocks.append(frame_document(doc))
+                evidence.append((doc.name, doc.text))
         except Exception as exc:  # noqa: BLE001 — report per file, keep going
             failures.append(f"Could not attach {name}: {exc}")
-    return images, doc_blocks, failures
+    return images, doc_blocks, evidence, failures
 
 
 def main() -> None:

@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hearth.local/intentseal/scenario.schema.json",
+  "title": "IntentSeal benchmark scenario",
+  "description": "One inert adversarial case or its matched benign control. Ground truth (expected_decision, oracle, protected_asset) lives under `ground_truth`, deliberately separated from the model-visible `carrier` text so the agent can never read its own answer.",
+  "type": "object",
+  "required": [
+    "id", "schema_version", "family", "family_name", "variant", "capability",
+    "is_control", "trusted_goal", "setup", "carrier", "source_origin", "marker",
+    "available_tools", "why", "tool", "proposal", "intent", "provenance",
+    "ground_truth", "cleanup", "citations"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^G[0-9]{1,2}-[0-9]{2,3}[AB]?$" },
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "family": { "type": "string", "pattern": "^G[0-9]{1,2}$" },
+    "family_name": { "type": "string", "minLength": 3 },
+    "variant": { "type": "string", "minLength": 3 },
+    "capability": { "enum": ["current", "future"] },
+    "is_control": { "type": "boolean" },
+    "control_of": { "type": ["string", "null"] },
+    "benign_control_id": { "type": ["string", "null"] },
+    "trusted_goal": { "type": "string", "minLength": 5 },
+    "setup": { "type": "string", "minLength": 5 },
+    "carrier": { "type": "string", "minLength": 3 },
+    "source_origin": {
+      "enum": ["user", "system", "email", "ics", "web", "file", "tool_output",
+               "mcp", "memory", "device", "clipboard", "screenshot"]
+    },
+    "marker": { "type": "string" },
+    "available_tools": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "why": { "type": "string", "minLength": 5 },
+    "tool": { "type": "string", "minLength": 2 },
+    "proposal": {
+      "type": "object",
+      "required": ["action_class", "args", "reversible", "egress"],
+      "additionalProperties": false,
+      "properties": {
+        "action_class": {
+          "enum": ["read", "write_local", "send_external", "egress", "delete",
+                   "purchase", "credential", "physical", "execute"]
+        },
+        "args": { "type": "object" },
+        "target_kind": { "type": "string" },
+        "target_id": { "type": "string" },
+        "target_attributes": { "type": "object" },
+        "effect_kinds": {
+          "type": "array",
+          "items": { "enum": ["read", "write", "egress", "audience_expansion",
+                              "bulk", "recurring", "physical", "irreversible"] }
+        },
+        "audience": { "type": "array", "items": { "type": "string" } },
+        "data_out": { "type": "array", "items": { "type": "string" } },
+        "reversible": { "type": "boolean" },
+        "egress": { "type": "boolean" },
+        "physical": { "type": "boolean" },
+        "quantity": { "type": "integer", "minimum": 1 },
+        "flags": { "type": "array", "items": { "type": "string" } },
+        "pre_state_hash": { "type": "string" }
+      }
+    },
+    "intent": {
+      "type": "object",
+      "required": ["principal", "account"],
+      "additionalProperties": false,
+      "properties": {
+        "principal": { "type": "string" },
+        "account": { "type": "string" },
+        "allowed_action_classes": { "type": ["array", "null"], "items": { "type": "string" } },
+        "allowed_resources": { "type": ["array", "null"], "items": { "type": "string" } },
+        "allowed_recipients": { "type": ["array", "null"], "items": { "type": "string" } },
+        "protected_data_classes": { "type": "array", "items": { "type": "string" } },
+        "max_quantity": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["trigger_origin", "arg_bindings"],
+      "additionalProperties": false,
+      "properties": {
+        "trigger_origin": { "type": "string" },
+        "arg_bindings": {
+          "type": "object",
+          "description": "arg name -> {origin, data_classes, literal}",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "origin": { "type": "string" },
+              "data_classes": { "type": "array", "items": { "type": "string" } },
+              "literal": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "ground_truth": {
+      "type": "object",
+      "required": ["expected_decision", "protected_asset", "oracle"],
+      "additionalProperties": false,
+      "properties": {
+        "expected_decision": { "enum": ["ALLOW", "DENY", "ASK", "REDACT", "QUARANTINE"] },
+        "protected_asset": { "type": "string" },
+        "oracle": {
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "enum": ["no_state_change", "state_change_ok",
+                               "canary_not_egressed", "no_local_egress"] },
+            "note": { "type": "string" }
+          }
+        }
+      }
+    },
+    "cleanup": { "type": "string" },
+    "citations": { "type": "array", "items": { "type": "string", "pattern": "^S[0-9]{2}$" } }
+  }
+}

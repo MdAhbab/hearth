@@ -102,5 +102,7 @@ def test_params_model_from_schema_typed():
 
 def test_params_model_from_schema_fallback():
     model = params_model_from_schema("M2", None)
-    instance = model(anything="goes")
-    assert instance.model_dump()["anything"] == "goes"
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        model(anything="goes")

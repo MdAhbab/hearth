@@ -1,0 +1,28 @@
+{
+  "configurations": [
+    "baseline_current_hearth",
+    "detector_advisory",
+    "intentseal_full",
+    "ablation_no_intent_binding",
+    "ablation_no_provenance",
+    "ablation_no_canonicalization",
+    "ablation_no_one_use_seal",
+    "ablation_no_staging",
+    "ablation_no_postconditions",
+    "ablation_no_domain_rules"
+  ],
+  "corpus_sha256": "c5cec9c7880b77d03e489f13a3685148af262a0463b27f1477f8ef8109ff47ab",
+  "execution": {
+    "approvals": "deterministic approve-after-card regime",
+    "current_hearth": "ToolRegistry -> ActionGate -> monitor authorization -> seal verification -> inert staged handler -> postcondition -> SQLite hash-chain audit",
+    "external_network": "denied for complete run",
+    "future_emulator": "disabled-by-default synthetic protocol adapter -> same monitor authorize/verify interfaces -> inert world"
+  },
+  "labels_sha256": "ebb4a5c83840dbd2a8e140cc4a6911c48d05d0464f8d11bd8bafbd43bf1b4191",
+  "model_in_loop": "not run; reserved for the next phase",
+  "results_csv_sha256": "310b02e7fe42fff18a605b15b1d8c112ac761431610f3f7bc83fed362c234ff2",
+  "results_sha256": "848725b845247bed5fd34aed778043c96eed14bfc438174165b0a78347be7f47",
+  "rows": 2000,
+  "schema_version": "2.0.0",
+  "summary_sha256": "fe529fe30040ed52f90ece93c0ee4e93f7b93afdaa4a75cf0d23b7b8c530cfcc"
+}

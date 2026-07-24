@@ -17,11 +17,18 @@ import httpx
 from pydantic import BaseModel, Field
 
 from ...agent.tools import RiskLevel, ToolRegistry, ToolResult, ToolSpec
+from ..utility.tools import fetch_with_validated_redirects
 
 _GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 _FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 _TIMEOUT = 15.0
 _UA = "Hearth/0.1 (local personal AI; contact: open-source project)"
+_ALLOWED_WEATHER_HOSTS = frozenset(
+    {
+        "geocoding-api.open-meteo.com",
+        "api.open-meteo.com",
+    }
+)
 
 # WMO weather interpretation codes → human-readable string
 _WMO_CODES: dict[int, str] = {
@@ -67,6 +74,14 @@ class WeatherParams(BaseModel):
     )
 
 
+async def _weather_get(client: httpx.AsyncClient, url: str) -> httpx.Response:
+    """GET an allowlisted Open-Meteo URL with hop/final-peer validation."""
+    host = httpx.URL(url).host
+    if host not in _ALLOWED_WEATHER_HOSTS:
+        raise ValueError(f"weather host is not on the Open-Meteo allowlist: {host}")
+    return await fetch_with_validated_redirects(client, url)
+
+
 async def _geocode(location: str, client: httpx.AsyncClient) -> tuple[float, float, str]:
     """Return (lat, lon, display_name). Raises ValueError on failure."""
     # Try lat,lon shortcut first
@@ -77,10 +92,12 @@ async def _geocode(location: str, client: httpx.AsyncClient) -> tuple[float, flo
         except ValueError:
             pass
 
-    resp = await client.get(
+    request = httpx.Request(
+        "GET",
         _GEOCODE_URL,
         params={"name": location, "count": 1, "language": "en", "format": "json"},
     )
+    resp = await _weather_get(client, str(request.url))
     resp.raise_for_status()
     data = resp.json()
     results = data.get("results") or []
@@ -102,7 +119,7 @@ def register_weather_tools(registry: ToolRegistry) -> None:
         async with httpx.AsyncClient(
             timeout=_TIMEOUT,
             headers={"User-Agent": _UA},
-            follow_redirects=True,
+            follow_redirects=False,
         ) as client:
             try:
                 lat, lon, display_name = await _geocode(p.location, client)
@@ -138,9 +155,10 @@ def register_weather_tools(registry: ToolRegistry) -> None:
                 "forecast_days": 1,
             }
             try:
-                resp = await client.get(_FORECAST_URL, params=params)
+                forecast_request = httpx.Request("GET", _FORECAST_URL, params=params)
+                resp = await _weather_get(client, str(forecast_request.url))
                 resp.raise_for_status()
-            except httpx.HTTPError as exc:
+            except (ValueError, httpx.HTTPError) as exc:
                 return ToolResult(ok=False, error=f"Weather fetch failed: {exc}")
 
             data = resp.json()

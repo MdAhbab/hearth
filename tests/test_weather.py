@@ -1,4 +1,4 @@
-"""Tests for weather_current tool with mocked httpx (Capability 4)."""
+"""Tests for weather_current tool with mocked Open-Meteo fetches (Capability 4)."""
 
 from __future__ import annotations
 
@@ -8,10 +8,6 @@ import pytest
 
 from hearth.agent.tools import ToolRegistry
 from hearth.connectors.weather.tools import _degrees_to_compass, register_weather_tools
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _make_geocode_response(lat=35.68, lon=139.69, name="Tokyo", country="Japan"):
@@ -68,17 +64,22 @@ async def test_weather_current_success(registry):
     geocode_resp = _make_geocode_response()
     forecast_resp = _make_forecast_response()
 
-    async def mock_get(url, **kwargs):
-        if "geocoding" in url:
+    async def mock_fetch(client, url, **kwargs):
+        if "geocoding" in str(url):
             return geocode_resp
         return forecast_resp
 
     mock_client = AsyncMock()
-    mock_client.get = mock_get
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("hearth.connectors.weather.tools.httpx.AsyncClient", return_value=mock_client):
+    with (
+        patch("hearth.connectors.weather.tools.httpx.AsyncClient", return_value=mock_client),
+        patch(
+            "hearth.connectors.weather.tools.fetch_with_validated_redirects",
+            side_effect=mock_fetch,
+        ),
+    ):
         result = await registry.get("weather_current").handler(
             registry.validate_args("weather_current", {"location": "Tokyo"})
         )
@@ -99,15 +100,20 @@ async def test_weather_unknown_location(registry):
     no_result.raise_for_status = MagicMock()
     no_result.json.return_value = {"results": []}
 
-    async def mock_get(url, **kwargs):
+    async def mock_fetch(client, url, **kwargs):
         return no_result
 
     mock_client = AsyncMock()
-    mock_client.get = mock_get
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("hearth.connectors.weather.tools.httpx.AsyncClient", return_value=mock_client):
+    with (
+        patch("hearth.connectors.weather.tools.httpx.AsyncClient", return_value=mock_client),
+        patch(
+            "hearth.connectors.weather.tools.fetch_with_validated_redirects",
+            side_effect=mock_fetch,
+        ),
+    ):
         result = await registry.get("weather_current").handler(
             registry.validate_args("weather_current", {"location": "xyznotacity"})
         )
@@ -119,25 +125,25 @@ async def test_weather_unknown_location(registry):
 async def test_weather_latlon_shortcut(registry):
     forecast_resp = _make_forecast_response()
 
-    async def mock_get(url, **kwargs):
+    async def mock_fetch(client, url, **kwargs):
         return forecast_resp
 
     mock_client = AsyncMock()
-    mock_client.get = mock_get
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("hearth.connectors.weather.tools.httpx.AsyncClient", return_value=mock_client):
+    with (
+        patch("hearth.connectors.weather.tools.httpx.AsyncClient", return_value=mock_client),
+        patch(
+            "hearth.connectors.weather.tools.fetch_with_validated_redirects",
+            side_effect=mock_fetch,
+        ),
+    ):
         result = await registry.get("weather_current").handler(
             registry.validate_args("weather_current", {"location": "35.68,139.69"})
         )
     assert result.ok
     assert result.data["latitude"] == 35.68
-
-
-# ---------------------------------------------------------------------------
-# Compass helper unit test
-# ---------------------------------------------------------------------------
 
 
 def test_compass_directions():

@@ -7,7 +7,9 @@ the OS credential store (see keychain.py).
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import sqlite3
 import threading
 import time
@@ -83,7 +85,54 @@ MIGRATIONS: list[str] = [
     CREATE INDEX idx_actions_conversation ON actions(conversation_id);
     CREATE INDEX idx_reminders_open ON reminders(completed, due_at);
     """,
+    # v4 — IntentSeal: spent one-use seal nonces (cross-session replay defense)
+    # and a decision column on the action audit trail.
+    """
+    CREATE TABLE seal_nonces (
+        nonce TEXT PRIMARY KEY,
+        used_at REAL NOT NULL
+    );
+    ALTER TABLE actions ADD COLUMN decision TEXT NOT NULL DEFAULT '';
+    """,
+    # v5 — durable redacted hash-chain and effect idempotency reservations.
+    """
+    CREATE TABLE intentseal_audit (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        at REAL NOT NULL,
+        payload_json TEXT NOT NULL,
+        prev_hash TEXT NOT NULL,
+        record_hash TEXT NOT NULL UNIQUE
+    );
+    CREATE TABLE intentseal_idempotency (
+        effect_key TEXT PRIMARY KEY,
+        action_id INTEGER,
+        status TEXT NOT NULL,
+        created_at REAL NOT NULL,
+        updated_at REAL NOT NULL
+    );
+    """,
 ]
+
+_AUDIT_CANARY_RE = re.compile(r"(?i)\b[A-Z0-9_-]*CANARY[A-Z0-9_-]*\b")
+_AUDIT_SECRET_RE = re.compile(
+    r"(?i)(?:\bsk-[a-z0-9_-]{8,}\b|\b(?:ghp|github_pat|xox[baprs])_[a-z0-9_-]{8,}\b|"
+    r"\bAKIA[0-9A-Z]{12,}\b|\bSYNTHETIC[_-]SECRET[A-Z0-9_-]*\b)"
+)
+
+
+def _redact_audit_value(value):
+    if isinstance(value, dict):
+        return {str(key): _redact_audit_value(child) for key, child in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_audit_value(child) for child in value]
+    if isinstance(value, str):
+        value = _AUDIT_CANARY_RE.sub("«REDACTED-CANARY»", value)
+        return _AUDIT_SECRET_RE.sub("«REDACTED-SECRET»", value)
+    return value
+
+
+def _chain_hash(payload_json: str, prev_hash: str) -> str:
+    return hashlib.sha256(f"{prev_hash}\n{payload_json}".encode()).hexdigest()
 
 
 class _LockedConnection:
@@ -192,10 +241,20 @@ class Database:
         preview: str = "",
         conversation_id: int | None = None,
     ) -> int:
+        safe_args = _redact_audit_value(args)
+        safe_preview = _redact_audit_value(preview)
         cur = self._conn.execute(
             "INSERT INTO actions (conversation_id, tool, args_json, risk, status,"
             " preview, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (conversation_id, tool, json.dumps(args), risk, status, preview, time.time()),
+            (
+                conversation_id,
+                tool,
+                json.dumps(safe_args),
+                risk,
+                status,
+                safe_preview,
+                time.time(),
+            ),
         )
         self._conn.commit()
         return cur.lastrowid
@@ -216,6 +275,105 @@ class Database:
         return self._conn.execute(
             "SELECT * FROM actions ORDER BY id DESC LIMIT ?", (limit,)
         ).fetchall()
+
+    def set_action_decision(self, action_id: int, decision: str) -> None:
+        """Record the IntentSeal policy decision on an audit row."""
+        try:
+            self._conn.execute(
+                "UPDATE actions SET decision = ? WHERE id = ?", (decision, action_id)
+            )
+            self._conn.commit()
+        except sqlite3.ProgrammingError:
+            pass  # app quitting — losing the decision label is fine, crashing isn't
+
+    # -- IntentSeal one-use seal nonces --------------------------------------
+
+    def mark_seal_nonce(self, nonce: str) -> bool:
+        """Record a seal nonce as spent. Returns True if newly used, False if
+        it was already consumed — i.e. a replay attempt. Atomic under the
+        connection lock, so two concurrent verifications cannot both win."""
+        try:
+            self._conn.execute(
+                "INSERT INTO seal_nonces (nonce, used_at) VALUES (?, ?)", (nonce, time.time())
+            )
+            self._conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+    def is_seal_nonce_used(self, nonce: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM seal_nonces WHERE nonce = ?", (nonce,)
+        ).fetchone()
+        return row is not None
+
+    # -- IntentSeal durable audit + idempotency ------------------------------
+
+    def append_intentseal_audit(self, payload: dict[str, Any]) -> int:
+        safe = _redact_audit_value(payload)
+        payload_json = json.dumps(
+            safe, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
+        )
+        row = self._conn.execute(
+            "SELECT record_hash FROM intentseal_audit ORDER BY seq DESC LIMIT 1"
+        ).fetchone()
+        prev_hash = row["record_hash"] if row else "0" * 64
+        record_hash = _chain_hash(payload_json, prev_hash)
+        cur = self._conn.execute(
+            "INSERT INTO intentseal_audit "
+            "(at, payload_json, prev_hash, record_hash) VALUES (?, ?, ?, ?)",
+            (time.time(), payload_json, prev_hash, record_hash),
+        )
+        self._conn.commit()
+        return cur.lastrowid
+
+    def list_intentseal_audit(self, limit: int = 500) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM intentseal_audit ORDER BY seq DESC LIMIT ?", (limit,)
+        ).fetchall()
+
+    def verify_intentseal_audit(self) -> bool:
+        rows = self._conn.execute(
+            "SELECT * FROM intentseal_audit ORDER BY seq"
+        ).fetchall()
+        previous = "0" * 64
+        for row in rows:
+            if row["prev_hash"] != previous:
+                return False
+            if row["record_hash"] != _chain_hash(row["payload_json"], previous):
+                return False
+            previous = row["record_hash"]
+        return True
+
+    def reserve_idempotency(self, effect_key: str, action_id: int | None) -> bool:
+        try:
+            now = time.time()
+            self._conn.execute(
+                "INSERT INTO intentseal_idempotency "
+                "(effect_key, action_id, status, created_at, updated_at) "
+                "VALUES (?, ?, 'reserved', ?, ?)",
+                (effect_key, action_id, now, now),
+            )
+            self._conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+    def finish_idempotency(self, effect_key: str, status: str) -> None:
+        self._conn.execute(
+            "UPDATE intentseal_idempotency SET status = ?, updated_at = ? "
+            "WHERE effect_key = ?",
+            (status, time.time(), effect_key),
+        )
+        self._conn.commit()
+
+    def release_idempotency(self, effect_key: str) -> None:
+        self._conn.execute(
+            "DELETE FROM intentseal_idempotency "
+            "WHERE effect_key = ? AND status = 'reserved'",
+            (effect_key,),
+        )
+        self._conn.commit()
 
     # -- approved folders / shortcuts -----------------------------------------
 
@@ -269,6 +427,18 @@ class Database:
     def get_connector_status(self, name: str) -> str:
         row = self._conn.execute("SELECT status FROM connectors WHERE name = ?", (name,)).fetchone()
         return row["status"] if row else "disconnected"
+
+    def get_connector_metadata(self, name: str) -> dict[str, Any]:
+        row = self._conn.execute(
+            "SELECT metadata_json FROM connectors WHERE name = ?", (name,)
+        ).fetchone()
+        if row is None:
+            return {}
+        try:
+            value = json.loads(row["metadata_json"])
+        except json.JSONDecodeError:
+            return {}
+        return value if isinstance(value, dict) else {}
 
     # -- reminders (cross-platform fallback) ------------------------------------
 

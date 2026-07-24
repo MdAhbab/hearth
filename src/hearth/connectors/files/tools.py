@@ -8,11 +8,15 @@ through the confirmation card. Deletes go to the Trash, never rm.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import shutil
+import tempfile
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from ...agent.tools import RiskLevel, ToolRegistry, ToolResult, ToolSpec
+from ...agent.tools import RiskLevel, StagedAction, ToolRegistry, ToolResult, ToolSpec
+from ...assurance import StagedFileWrite, canonical_file
 from .roots import ApprovedRoots, PathOutsideRootsError
 
 # Directories that are never worth scanning: hidden trees plus dependency/
@@ -183,6 +187,55 @@ def register_file_tools(
 
         return await asyncio.to_thread(_write)
 
+    async def stage_write(p: WriteParams) -> StagedAction | ToolResult:
+        target = _guard(p.path, for_write=True)
+        if isinstance(target, ToolResult):
+            return target
+        if target.exists() and not p.overwrite:
+            return ToolResult(
+                ok=False, error=f"File exists: {p.path}. Set overwrite to replace it."
+            )
+        staging_dir = Path(tempfile.mkdtemp(prefix="hearth-intentseal-stage-"))
+        op = await asyncio.to_thread(
+            lambda: StagedFileWrite(target, p.content, staging_dir).stage()
+        )
+        undo: dict = {}
+        undo_record = []
+
+        async def commit() -> ToolResult:
+            record = await asyncio.to_thread(op.commit)
+            undo_record.append(record)
+            undo.update(
+                {
+                    "kind": record.kind,
+                    "detail": record.detail,
+                    "reversible": record.reversible,
+                }
+            )
+            return ToolResult(ok=True, data=f"Wrote {len(p.content)} characters to {target}")
+
+        async def discard() -> None:
+            await asyncio.to_thread(op.discard)
+            await asyncio.to_thread(shutil.rmtree, staging_dir, True)
+
+        async def undo_commit() -> None:
+            if undo_record:
+                await asyncio.to_thread(op.undo, undo_record[-1])
+
+        return StagedAction(
+            semantic_diff=op.diff().render(),
+            commit=commit,
+            discard=discard,
+            undo_metadata=lambda: dict(undo),
+            undo=undo_commit,
+        )
+
+    def write_state(p: WriteParams) -> str:
+        target = _guard(p.path, for_write=True)
+        if isinstance(target, ToolResult):
+            return ""
+        return canonical_file(str(target)).attributes.get("content_hash", "")
+
     async def move(p: MoveParams) -> ToolResult:
         src = _guard(p.source)
         if isinstance(src, ToolResult):
@@ -256,6 +309,11 @@ def register_file_tools(
             risk=RiskLevel.WRITE,
             permission="files",
             handler=write_file,
+            stager=stage_write,
+            rollback_supported=True,
+            postcondition_supported=True,
+            state_probe=write_state,
+            expected_post_state=lambda p: hashlib.sha256(p.content.encode("utf-8")).hexdigest(),
             preview=lambda p: (
                 f"Write file: {p.path}\nOverwrite existing: {p.overwrite}\n"
                 f"--- content ({len(p.content)} chars) ---\n{p.content[:1500]}"

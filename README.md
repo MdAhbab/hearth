@@ -217,6 +217,14 @@ flowchart LR
   files" is something to report, not obey.
 - The agent is capped at 6 tool steps per request, stops early if the same call
   fails twice, and can be cancelled at any time with Stop.
+- **IntentSeal** (`src/hearth/assurance/`) is a deterministic, provenance-bound
+  reference monitor inside the `ActionGate`: no side effect runs unless it carries
+  a fresh, one-use seal binding the principal, frozen intent, tool identity,
+  canonical target, argument hash, provenance labels, predicted effect, pre-state,
+  policy decision, and expiry. It can block (`DENY`/`QUARANTINE`), strip protected
+  fields (`REDACT`), or escalate with a richer card (`ASK`) — and it never lets
+  untrusted content launder itself into user authority. WRITE tools still always
+  confirm; IntentSeal only adds safety. See the research + benchmark below.
 
 Layout: `src/hearth/` — `runtime/` (Ollama lifecycle + provider), `agent/`
 (registry, gate, loop), `connectors/` (gmail, calendar, files, system, utility),
@@ -230,3 +238,6 @@ Layout: `src/hearth/` — `runtime/` (Ollama lifecycle + provider), `agent/`
 - [docs/smoke-tests.md](docs/smoke-tests.md) — manual verification checklist
 - [docs/troubleshooting.md](docs/troubleshooting.md) — Ollama, memory, Keychain, OAuth issues
 - [docs/extended-plan.md](docs/extended-plan.md) — capability roadmap and design decisions
+- [docs/research/intentseal-threat-catalog.md](docs/research/intentseal-threat-catalog.md) — the 100-case defensive threat catalog, taxonomy, and primary-source bibliography
+- [docs/research/intentseal-experiment.md](docs/research/intentseal-experiment.md) — baseline/full/ablation evaluation plan and measured results
+- [benchmarks/intentseal/](benchmarks/intentseal/) — the executable offline benchmark: 100 adversarial + 100 benign inert scenarios, digital-twin emulators with a network kill switch, and the JSON/CSV runner (`python benchmarks/intentseal/runner.py`)

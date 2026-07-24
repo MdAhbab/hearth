@@ -1,0 +1,11 @@
+{
+  "adversarial": 100,
+  "canonical_corpus": "scenarios.v2.jsonl",
+  "controls": 100,
+  "current_hearth_adversarial": 70,
+  "future_emulator_adversarial": 30,
+  "labels": "separate frozen labels.v2.json; this builder never writes labels",
+  "records": 200,
+  "schema_version": "2.0.0",
+  "sha256": "c5cec9c7880b77d03e489f13a3685148af262a0463b27f1477f8ef8109ff47ab"
+}

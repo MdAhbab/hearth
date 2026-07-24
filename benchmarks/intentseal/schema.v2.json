@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hearth.local/intentseal/scenario.v2.schema.json",
+  "title": "IntentSeal independent-evidence scenario v2",
+  "description": "An inert executable scenario without expected policy labels. Labels are joined from the separately frozen labels.v2.json artifact.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id", "schema_version", "seed", "pair_id", "is_control", "control_of",
+    "benign_control_id", "family", "family_name", "capability", "variant",
+    "mechanism", "trusted_goal", "carrier", "source_origin", "source_trust",
+    "tool", "proposal", "intent", "runtime", "trajectory", "unsafe_property",
+    "pair_contract", "oracle", "cleanup", "citations"
+  ],
+  "properties": {
+    "id": {"type": "string", "pattern": "^G(?:10|[1-9])-[0-9]{2,3}B?$"},
+    "schema_version": {"type": "string", "const": "2.0.0"},
+    "seed": {"type": "integer", "minimum": 1},
+    "pair_id": {"type": "string", "pattern": "^G(?:10|[1-9])-[0-9]{2,3}$"},
+    "is_control": {"type": "boolean"},
+    "control_of": {"type": ["string", "null"]},
+    "benign_control_id": {"type": ["string", "null"]},
+    "family": {"type": "string", "pattern": "^G(?:10|[1-9])$"},
+    "family_name": {"type": "string", "minLength": 3},
+    "capability": {"enum": ["current_hearth", "future_emulator"]},
+    "variant": {"type": "string", "minLength": 10},
+    "mechanism": {"type": "string", "minLength": 3},
+    "trusted_goal": {"type": "string", "minLength": 10},
+    "carrier": {
+      "type": "object",
+      "required": ["kind", "source_trust"],
+      "properties": {
+        "kind": {"type": "string"},
+        "source_trust": {"const": "untrusted_data"}
+      }
+    },
+    "source_origin": {
+      "enum": ["ics", "web", "file", "tool_output", "clipboard", "mcp", "memory", "device"]
+    },
+    "source_trust": {"const": "untrusted_data"},
+    "tool": {"type": "string", "minLength": 3},
+    "proposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action_class", "args", "target", "effect_kinds", "audience",
+        "data_out", "reversible", "egress", "physical", "quantity"
+      ],
+      "properties": {
+        "action_class": {
+          "enum": ["read", "write_local", "send_external", "egress", "delete",
+                   "purchase", "credential", "physical", "execute"]
+        },
+        "args": {"type": "object"},
+        "target": {
+          "type": "object",
+          "required": ["kind", "canonical_id", "attributes"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"type": "string"},
+            "canonical_id": {"type": "string"},
+            "attributes": {"type": "object"}
+          }
+        },
+        "effect_kinds": {
+          "type": "array",
+          "items": {
+            "enum": ["read", "write", "egress", "audience_expansion", "bulk",
+                     "recurring", "physical", "irreversible"]
+          }
+        },
+        "audience": {"type": "array", "items": {"type": "string"}},
+        "data_out": {"type": "array", "items": {"type": "string"}},
+        "reversible": {"type": "boolean"},
+        "egress": {"type": "boolean"},
+        "physical": {"type": "boolean"},
+        "quantity": {"type": "integer", "minimum": 1}
+      }
+    },
+    "intent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "goal", "principal", "account", "allowed_action_classes",
+        "allowed_resources", "allowed_recipients", "protected_data_classes",
+        "max_quantity"
+      ],
+      "properties": {
+        "goal": {"type": "string"},
+        "principal": {"type": "string"},
+        "account": {"type": "string"},
+        "allowed_action_classes": {"type": "array", "items": {"type": "string"}},
+        "allowed_resources": {"type": "array", "items": {"type": "string"}},
+        "allowed_recipients": {"type": "array", "items": {"type": "string"}},
+        "protected_data_classes": {"type": "array", "items": {"type": "string"}},
+        "max_quantity": {"type": "integer", "minimum": 1}
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "argument_origin", "tainted_args", "data_classes", "effect_flags",
+        "faults", "final_peer"
+      ],
+      "properties": {
+        "argument_origin": {"type": "string"},
+        "tainted_args": {"type": "array", "items": {"type": "string"}},
+        "data_classes": {"type": "object"},
+        "effect_flags": {"type": "array", "items": {"type": "string"}},
+        "faults": {"type": "array", "items": {"type": "string"}},
+        "final_peer": {"type": "string"}
+      }
+    },
+    "trajectory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "steps"],
+      "properties": {
+        "mode": {"enum": ["single_step", "multi_step", "multi_turn"]},
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["id", "turn", "kind", "depends_on"],
+            "properties": {
+              "id": {"type": "string"},
+              "turn": {"type": "integer", "minimum": 1},
+              "kind": {"enum": ["ingest", "persist", "delay", "tool_call", "retry", "dependent"]},
+              "depends_on": {"type": "array", "items": {"type": "string"}},
+              "persist_provenance": {"type": "boolean"},
+              "uses_persisted_provenance": {"type": "boolean"},
+              "ticks": {"type": "integer", "minimum": 1},
+              "same_idempotency_key": {"type": "boolean"},
+              "stop_on_failed_dependency": {"type": "boolean"}
+            }
+          }
+        }
+      }
+    },
+    "unsafe_property": {
+      "type": "object",
+      "required": ["name", "state", "only_pair_delta"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"},
+        "state": {"enum": ["present", "absent"]},
+        "only_pair_delta": {"const": true}
+      }
+    },
+    "pair_contract": {
+      "type": "object",
+      "required": ["preserve", "justified_exceptions"],
+      "additionalProperties": false,
+      "properties": {
+        "preserve": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "justified_exceptions": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "oracle": {
+      "type": "object",
+      "required": ["protected_canary", "harm_sinks", "reset"],
+      "additionalProperties": false,
+      "properties": {
+        "protected_canary": {"type": "string", "pattern": "^INTENTSEAL_CANARY_V2_[0-9]{3}$"},
+        "harm_sinks": {"type": "array", "items": {"type": "string"}},
+        "reset": {"type": "string"}
+      }
+    },
+    "cleanup": {"type": "string", "minLength": 10},
+    "citations": {"type": "array", "items": {"type": "string", "pattern": "^S[0-9]{2}$"}}
+  }
+}
