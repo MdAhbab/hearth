@@ -12,7 +12,6 @@ import argparse
 import asyncio
 import contextlib
 import csv
-import fcntl
 import hashlib
 import json
 import os
@@ -23,12 +22,19 @@ import subprocess
 import sys
 import time
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, BinaryIO, Protocol
 
 import httpx
+
+try:  # POSIX advisory locks
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None  # type: ignore[assignment]
+    import msvcrt
 
 _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
@@ -60,20 +66,134 @@ from hearth.runtime.provider import (  # noqa: E402
 )
 
 HERE = Path(__file__).resolve().parent
-RESULTS_DIR = HERE / "results" / "model"
+RESULTS_ROOT = HERE / "results"
+REPEAT_SUBSET_PATH = HERE / "repeat_subset.v1.json"
+
+
+@dataclass(frozen=True)
+class ModelSpec:
+    """One evaluated model configuration.
+
+    ``expected_digest`` and ``expected_quantization`` pin a local artifact by
+    content, so a silently replaced tag is refused rather than measured.  An
+    Ollama cloud tag is not content-addressable from this machine: it never
+    appears in ``/api/tags`` and exposes no blob digest, so a cloud entry
+    leaves both ``None`` and the run manifest records that it could not be
+    pinned.
+    """
+
+    key: str
+    model_id: str
+    label: str
+    results_subdir: str
+    execution: str = "local"
+    expected_digest: str | None = None
+    expected_quantization: str | None = None
+
+    @property
+    def results_dir(self) -> Path:
+        return RESULTS_ROOT / self.results_subdir
+
+    @property
+    def is_local(self) -> bool:
+        return self.execution == "local"
+
+
+# Registry of evaluated configurations.  Adding a model is a new entry plus a
+# row in the paper's comparison scripts; nothing else in this file changes.
+#
+# Machine matters for two rows only.  Behavior rates depend on the corpus, the
+# frozen labels, and the deterministic gate, all identical wherever a run
+# executes.  Latency and monitor overhead do not, so the machine is part of a
+# run's recorded identity and of its directory name where two runs share a tag.
+MODEL_SPECS: dict[str, ModelSpec] = {
+    # Preregistered baseline, measured on an Apple M3 laptop under Ollama 0.32.3.
+    "gemma4-e2b": ModelSpec(
+        key="gemma4-e2b",
+        model_id="gemma4:e2b",
+        label="Gemma 4 E2B",
+        results_subdir="model",
+        expected_digest=(
+            "7fbdbf8f5e45a75bb122155ed546e765b4d9c53a1285f62fd9f506baa1c5a47e"
+        ),
+        expected_quantization="Q4_K_M",
+    ),
+    # Same pinned artifact, same laptop, after the runtime updated to 0.32.4.
+    "gemma4-e2b-0324": ModelSpec(
+        key="gemma4-e2b-0324",
+        model_id="gemma4:e2b",
+        label="Gemma 4 E2B (0.32.4)",
+        results_subdir="model_gemma4_e2b_ollama0324",
+        expected_digest=(
+            "7fbdbf8f5e45a75bb122155ed546e765b4d9c53a1285f62fd9f506baa1c5a47e"
+        ),
+        expected_quantization="Q4_K_M",
+    ),
+    # Second local family, measured on the same laptop.
+    "qwen35-4b": ModelSpec(
+        key="qwen35-4b",
+        model_id="qwen3.5:4b",
+        label="Qwen 3.5 4B",
+        results_subdir="model_qwen35_4b",
+        expected_digest=(
+            "2a654d98e6fba55d452b7043684e9b57a947e393bbffa62485a7aac05ee4eefd"
+        ),
+        expected_quantization="Q4_K_M",
+    ),
+    # The same qwen3.5:4b artifact re-measured on an x86-64 desktop.  Pairing an
+    # identical digest across two machines is what separates a machine effect
+    # from a model effect in the comparison.
+    "qwen35-4b-x86": ModelSpec(
+        key="qwen35-4b-x86",
+        model_id="qwen3.5:4b",
+        label="Qwen 3.5 4B (x86-64)",
+        results_subdir="model_qwen35_4b_x86",
+        expected_digest=(
+            "2a654d98e6fba55d452b7043684e9b57a947e393bbffa62485a7aac05ee4eefd"
+        ),
+        expected_quantization="Q4_K_M",
+    ),
+    # The larger on-device build of the preregistered family, x86-64 desktop.
+    "gemma4-e4b-x86": ModelSpec(
+        key="gemma4-e4b-x86",
+        model_id="gemma4:e4b",
+        label="Gemma 4 E4B (x86-64)",
+        results_subdir="model_gemma4_e4b_x86",
+        expected_digest=(
+            "c6eb396dbd5992bbe3f5cdb947e8bbc0ee413d7c17e2beaae69f5d569cf982eb"
+        ),
+        expected_quantization="Q4_K_M",
+    ),
+    # Cloud tags: no local blob, no digest, corpus text leaves the machine.
+    "nemotron3-super": ModelSpec(
+        key="nemotron3-super",
+        model_id="nemotron-3-super:cloud",
+        label="Nemotron 3 Super",
+        results_subdir="model_nemotron3_super_cloud",
+        execution="cloud",
+    ),
+    "minimax-m3": ModelSpec(
+        key="minimax-m3",
+        model_id="minimax-m3:cloud",
+        label="MiniMax M3",
+        results_subdir="model_minimax_m3_cloud",
+        execution="cloud",
+    ),
+}
+
+DEFAULT_MODEL_KEY = "gemma4-e2b"
+DEFAULT_SPEC = MODEL_SPECS[DEFAULT_MODEL_KEY]
+
+# Preserved module-level names for the preregistered run.
+RESULTS_DIR = DEFAULT_SPEC.results_dir
 RAW_JSONL = RESULTS_DIR / "raw.jsonl"
 RESULTS_CSV = RESULTS_DIR / "results.csv"
 SUMMARY_JSON = RESULTS_DIR / "summary.json"
 RUN_MANIFEST = RESULTS_DIR / "run_manifest.json"
-REPEAT_SUBSET_PATH = HERE / "repeat_subset.v1.json"
+MODEL_ID = DEFAULT_SPEC.model_id
+EXPECTED_MODEL_DIGEST = DEFAULT_SPEC.expected_digest
+EXPECTED_MODEL_QUANTIZATION = DEFAULT_SPEC.expected_quantization
 
-MODEL_ID = "gemma4:e2b"
-# Captured from this machine's /api/tags before preregistration.  Refuse a
-# silently replaced tag so resumed and complete runs use one exact artifact.
-EXPECTED_MODEL_DIGEST = (
-    "7fbdbf8f5e45a75bb122155ed546e765b4d9c53a1285f62fd9f506baa1c5a47e"
-)
-EXPECTED_MODEL_QUANTIZATION = "Q4_K_M"
 OLLAMA_HOST = "127.0.0.1"
 OLLAMA_PORT = 11434
 OLLAMA_BASE_URL = f"http://{OLLAMA_HOST}:{OLLAMA_PORT}"
@@ -114,13 +234,45 @@ def _canonical_parameters(text: Any) -> str:
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
+    """Replace a JSON artifact in one step, with LF terminators on every platform.
+
+    ``Path.write_text`` applies the platform newline translation, which would
+    give the same result set a different SHA-256 on Windows and on macOS.  The
+    manifest records the hash of each artifact, so the byte form must not
+    depend on where the run executed.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+    text = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    with temporary.open("w", encoding="utf-8", newline="\n") as stream:
+        stream.write(text)
     os.replace(temporary, path)
+
+
+@contextlib.contextmanager
+def _exclusive_lock(stream: BinaryIO) -> Iterator[None]:
+    """Hold an exclusive advisory lock on an open file, on POSIX and Windows.
+
+    Both platforms lock the whole file for the duration of one append.  POSIX
+    uses ``flock``; Windows has no equivalent, so ``msvcrt.locking`` takes a
+    byte-range lock from the current offset, which is the end of the file in
+    append mode and therefore never contends with a reader.
+    """
+    if fcntl is not None:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        return
+    offset = stream.tell()
+    msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
+    try:
+        yield
+    finally:
+        stream.seek(offset)
+        msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+        stream.seek(0, os.SEEK_END)
 
 
 def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
@@ -131,11 +283,10 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
         + "\n"
     ).encode()
     with path.open("ab") as stream:
-        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
-        stream.write(encoded)
-        stream.flush()
-        os.fsync(stream.fileno())
-        fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        with _exclusive_lock(stream):
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
 
 
 def _repair_and_load_jsonl(path: Path) -> tuple[list[dict[str, Any]], bool]:
@@ -201,6 +352,18 @@ class CaseProvider(Protocol):
 
 class NetworkIsolationError(RuntimeError):
     """Raised when evaluation code attempts any non-Ollama connection."""
+
+
+class ProviderUnavailableError(RuntimeError):
+    """Raised when the local daemon returned no response at all for a case.
+
+    This is an infrastructure failure, not a measurement.  A connection error
+    or a read timeout leaves no content, no tool call, and no latency, so the
+    case has nothing to score.  Recording it as a row would count a daemon
+    restart as a model parse failure, which is a metric the evaluation reports.
+    The case is therefore left pending and the run stops, so a resume picks it
+    up once the daemon is healthy again.
+    """
 
 
 @contextlib.contextmanager
@@ -321,10 +484,10 @@ class LocalOptionsTransport(httpx.AsyncBaseTransport):
 class ProductionLocalOllamaProvider:
     """Per-case adapter that delegates every chat to OllamaProvider."""
 
-    def __init__(self) -> None:
+    def __init__(self, spec: ModelSpec = DEFAULT_SPEC) -> None:
         self._model_config = ModelConfig(
             provider="ollama",
-            name=MODEL_ID,
+            name=spec.model_id,
             context_length=CONTEXT_LENGTH,
             max_agent_steps=1,
             keep_alive=KEEP_ALIVE,
@@ -385,38 +548,58 @@ async def _ollama_json(
         return value
 
 
-async def fetch_ollama_inventory() -> dict[str, Any]:
-    """Capture exact local model identity without making a generation call."""
+async def fetch_ollama_inventory(spec: ModelSpec = DEFAULT_SPEC) -> dict[str, Any]:
+    """Capture exact model identity without making a generation call.
+
+    A local tag is pinned by blob digest and quantization level, so a silently
+    replaced artifact aborts the run.  A cloud tag has neither: it does not
+    appear in ``/api/tags`` and ``/api/show`` returns only what the service
+    chose to disclose.  Those gaps are recorded as empty rather than filled
+    with an assumed value.
+    """
     version, tags, show = await asyncio.gather(
         _ollama_json("GET", "/api/version"),
         _ollama_json("GET", "/api/tags"),
-        _ollama_json("POST", "/api/show", payload={"model": MODEL_ID}),
+        _ollama_json("POST", "/api/show", payload={"model": spec.model_id}),
     )
     matches = [
         model
         for model in tags.get("models", [])
-        if model.get("name") == MODEL_ID or model.get("model") == MODEL_ID
+        if model.get("name") == spec.model_id or model.get("model") == spec.model_id
     ]
-    if len(matches) != 1:
+    if spec.is_local and len(matches) != 1:
         raise RuntimeError(
-            f"expected exactly one local {MODEL_ID!r} inventory entry, got {len(matches)}"
+            f"expected exactly one local {spec.model_id!r} inventory entry, "
+            f"got {len(matches)}"
         )
-    tag = matches[0]
+    tag = matches[0] if matches else {}
     details = tag.get("details") or show.get("details") or {}
     model_info = show.get("model_info") or {}
     digest = tag.get("digest", "")
     quantization = details.get("quantization_level", "")
-    if not digest or not quantization:
-        raise RuntimeError("local model inventory omitted digest or quantization")
-    if digest != EXPECTED_MODEL_DIGEST or quantization != EXPECTED_MODEL_QUANTIZATION:
-        raise RuntimeError(
-            "local model artifact differs from preregistration: "
-            f"digest={digest!r}, quantization={quantization!r}"
-        )
+    if spec.is_local:
+        if not digest or not quantization:
+            raise RuntimeError("local model inventory omitted digest or quantization")
+        if (
+            digest != spec.expected_digest
+            or quantization != spec.expected_quantization
+        ):
+            raise RuntimeError(
+                f"local {spec.model_id!r} artifact differs from preregistration: "
+                f"digest={digest!r}, quantization={quantization!r}"
+            )
+    # The native context window is published under an architecture-prefixed key
+    # ("gemma4.context_length", "qwen35.context_length"), so read the
+    # architecture rather than hard-coding one family.  This key is deliberately
+    # not added to the inventory dict: the dict is hashed into the preregistered
+    # run's identity, and a cosmetic field must not invalidate it.
+    architecture = str(
+        model_info.get("general.architecture") or details.get("family") or ""
+    )
     inventory = {
         "ollama_version": version.get("version", ""),
-        "model_id": MODEL_ID,
-        "model_name": tag.get("name", ""),
+        "model_id": spec.model_id,
+        "model_name": tag.get("name", "") or str(show.get("model", "")),
         "model_digest": digest,
         "modified_at": tag.get("modified_at", ""),
         "size_bytes": tag.get("size"),
@@ -425,7 +608,7 @@ async def fetch_ollama_inventory() -> dict[str, Any]:
         "parameter_size": details.get("parameter_size", ""),
         "parameter_count": model_info.get("general.parameter_count"),
         "quantization": quantization,
-        "native_context_length": model_info.get("gemma4.context_length"),
+        "native_context_length": model_info.get(f"{architecture}.context_length"),
         "capabilities": show.get("capabilities", []),
         "model_defaults": _canonical_parameters(show.get("parameters", "")),
         "template_sha256": hashlib.sha256(
@@ -436,38 +619,131 @@ async def fetch_ollama_inventory() -> dict[str, Any]:
     return inventory
 
 
-def _hardware_inventory() -> dict[str, Any]:
-    def sysctl(name: str) -> str:
-        try:
-            return subprocess.check_output(
-                ["sysctl", "-n", name],
-                text=True,
-                stderr=subprocess.DEVNULL,
-            ).strip()
-        except (OSError, subprocess.CalledProcessError):
-            return ""
+def _sysctl(name: str) -> str:
+    try:
+        return subprocess.check_output(
+            ["sysctl", "-n", name],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return ""
 
+
+def _windows_cpu() -> dict[str, str]:
+    """CPU brand, system model, and physical core count from the Windows CIM store.
+
+    The comparison table prints one machine label per run, and timing rows are
+    only comparable within one machine, so an empty label off macOS would make
+    two different computers look like the same row.  A failure here still
+    returns empty strings; ``platform``/``machine``/``processor`` are captured
+    unconditionally, so the machine change is recorded either way.
+    """
+    script = (
+        "$c = Get-CimInstance Win32_Processor | Select-Object -First 1; "
+        "$s = Get-CimInstance Win32_ComputerSystem; "
+        "@{cpu_brand=$c.Name; physical_cpus=$c.NumberOfCores; "
+        "hardware_model=($s.Manufacturer + ' ' + $s.Model)} "
+        "| ConvertTo-Json -Compress"
+    )
+    try:
+        raw = subprocess.check_output(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=30,
+        )
+        parsed = json.loads(raw)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
+        return {}
+    return {
+        key: str(parsed.get(key) or "").strip()
+        for key in ("cpu_brand", "physical_cpus", "hardware_model")
+    }
+
+
+def _accelerator_inventory() -> dict[str, Any]:
+    """Which backend and device the local daemon will run the weights on.
+
+    This matters more than it looks.  One set of GGUF weights produces
+    different token sequences on different accelerator backends even at
+    temperature zero with a fixed seed, because the kernels differ in their
+    floating-point reduction order.  A run recorded only as "Apple M3" or
+    "Intel i5-10400" therefore under-describes itself: Metal and Vulkan are
+    the part that changes the model's output.
+
+    ``/api/ps`` reports a device only while a model is resident, so an empty
+    result is recorded as empty rather than guessed at.
+    """
+    try:
+        with httpx.Client(
+            base_url=OLLAMA_BASE_URL,
+            timeout=httpx.Timeout(10.0, connect=3.0),
+            trust_env=False,
+        ) as client:
+            payload = client.get("/api/ps").json()
+    except (httpx.HTTPError, ValueError, OSError):
+        return {"source": "unavailable"}
+    models = payload.get("models") or []
+    if not models:
+        return {"source": "/api/ps", "resident_models": 0}
+    resident = models[0]
+    size = int(resident.get("size") or 0)
+    vram = int(resident.get("size_vram") or 0)
+    return {
+        "source": "/api/ps",
+        "resident_models": len(models),
+        "resident_model": resident.get("name", ""),
+        "size_bytes": size,
+        "size_vram_bytes": vram,
+        # 100 means the whole model sits in device memory; a lower share means
+        # the remainder ran on the CPU, which changes both timing and output.
+        "share_on_device_pct": round(100.0 * vram / size, 1) if size else None,
+    }
+
+
+def _hardware_inventory() -> dict[str, Any]:
     memory_bytes: int | None = None
     try:
         import psutil
 
         memory_bytes = int(psutil.virtual_memory().total)
     except (ImportError, OSError):
-        raw_memory = sysctl("hw.memsize")
+        raw_memory = _sysctl("hw.memsize")
         memory_bytes = int(raw_memory) if raw_memory.isdigit() else None
+
+    if sys.platform == "win32":
+        described = _windows_cpu()
+    elif sys.platform == "darwin":
+        described = {
+            "hardware_model": _sysctl("hw.model"),
+            "cpu_brand": _sysctl("machdep.cpu.brand_string"),
+            "physical_cpus": _sysctl("hw.physicalcpu"),
+        }
+    else:
+        described = {}
     return {
         "platform": platform.platform(),
         "machine": platform.machine(),
         "processor": platform.processor(),
-        "hardware_model": sysctl("hw.model"),
-        "cpu_brand": sysctl("machdep.cpu.brand_string"),
-        "physical_cpus": sysctl("hw.physicalcpu"),
+        "hardware_model": described.get("hardware_model", ""),
+        "cpu_brand": described.get("cpu_brand", ""),
+        "physical_cpus": described.get("physical_cpus", ""),
         "logical_cpus": os.cpu_count(),
         "memory_bytes": memory_bytes,
+        "accelerator": _accelerator_inventory(),
     }
 
 
-def _git_inventory() -> dict[str, Any]:
+def _git_inventory(spec: ModelSpec = DEFAULT_SPEC) -> dict[str, Any]:
+    """Hash the source state, excluding the directory this run is writing into.
+
+    A run must not hash its own output, or the recorded source state would
+    change on every appended row.  Every other result directory stays inside
+    the hash, so a run that silently altered another run's results is visible.
+    """
+    own_results = f"benchmarks/intentseal/results/{spec.results_subdir}"
+
     def git(*args: str) -> bytes:
         return subprocess.check_output(
             ["git", *args],
@@ -483,7 +759,7 @@ def _git_inventory() -> dict[str, Any]:
             "HEAD",
             "--",
             ".",
-            ":(exclude)benchmarks/intentseal/results/model",
+            f":(exclude){own_results}",
         )
         untracked = git("ls-files", "--others", "--exclude-standard").decode().splitlines()
     except (OSError, subprocess.CalledProcessError):
@@ -492,7 +768,7 @@ def _git_inventory() -> dict[str, Any]:
     hasher.update(diff)
     included_untracked: list[str] = []
     for relative in sorted(untracked):
-        if relative.startswith("benchmarks/intentseal/results/model/"):
+        if relative.startswith(f"{own_results}/"):
             continue
         path = _REPO / relative
         if not path.is_file():
@@ -567,9 +843,14 @@ def _execution_plan(
 
 def _identity(
     records: list[dict[str, Any]],
-    subset: dict[str, Any],
     inventory: dict[str, Any],
 ) -> dict[str, Any]:
+    """Everything a resume must match before it appends to an existing run.
+
+    The repeat subset is not a parameter here: it enters the identity through
+    ``repeat_subset_sha256``, read from the file, so passing the parsed object
+    as well would give two sources for one fact.
+    """
     prompt_hashes = {
         record["id"]: request_hash(record)
         for record in records
@@ -641,6 +922,7 @@ def _new_manifest(
     identity: dict[str, Any],
     inventory: dict[str, Any],
     subset: dict[str, Any],
+    spec: ModelSpec = DEFAULT_SPEC,
 ) -> dict[str, Any]:
     now = _utc_now()
     return {
@@ -651,6 +933,12 @@ def _new_manifest(
         "run_started_at": None,
         "last_updated_at": now,
         "completed_at": None,
+        "model_spec": {
+            "key": spec.key,
+            "label": spec.label,
+            "results_subdir": spec.results_subdir,
+            "execution": spec.execution,
+        },
         "evaluation_identity": identity,
         "model_inventory": inventory,
         "software": {
@@ -660,7 +948,7 @@ def _new_manifest(
             "ollama_version": inventory["ollama_version"],
         },
         "hardware": _hardware_inventory(),
-        "source_state": _git_inventory(),
+        "source_state": _git_inventory(spec),
         "locality": {
             "only_allowed_service": OLLAMA_BASE_URL,
             "model_endpoint": f"{OLLAMA_BASE_URL}/api/chat",
@@ -669,6 +957,15 @@ def _new_manifest(
                 f"{OLLAMA_BASE_URL}/api/tags",
                 f"{OLLAMA_BASE_URL}/api/show",
             ],
+            # The socket guard observes only 127.0.0.1:11434 for every run.
+            # For a cloud tag the local daemon still forwards the request, so
+            # the guard alone does not establish that the corpus stayed on the
+            # machine.  These four fields record that distinction per run
+            # instead of leaving it to be inferred from the tag name.
+            "model_execution": spec.execution,
+            "model_weights_execute_locally": spec.is_local,
+            "corpus_text_leaves_machine": not spec.is_local,
+            "artifact_pinned_by_content_digest": spec.is_local,
             "real_connectors": False,
             "real_filesystem_roots": False,
             "real_accounts": False,
@@ -862,6 +1159,16 @@ async def _run_one(
                 }
             )
             calls = []
+    except httpx.TransportError as exc:
+        # The daemon went away, or the request never completed. No model
+        # response exists, so there is nothing to score. Persisting a row here
+        # would record an infrastructure failure as a model parse failure and
+        # corrupt the reported parse-failure rate, so the case is left pending
+        # and the run stops for the operator to fix the daemon and resume.
+        raise ProviderUnavailableError(
+            f"{type(exc).__name__} from the local daemon on {record['id']}: "
+            f"{str(exc)[:200] or 'no detail'}"
+        ) from exc
     except Exception as exc:  # noqa: BLE001 - preserve per-case errors and resume
         parse_failure = True
         errors.append(
@@ -1136,6 +1443,20 @@ def _update_manifest(
     repaired: bool,
 ) -> dict[str, Any]:
     manifest["last_updated_at"] = _utc_now()
+    # The accelerator can only be read while a model is resident, and nothing is
+    # resident when the manifest is first created. Fill it in at the first flush
+    # that follows a generation, then leave it alone.
+    #
+    # "Already recorded" covers a block written by hand as a migration as well
+    # as one captured here, so re-running a completed configuration cannot
+    # overwrite a recorded value with a fresh reading taken under different
+    # conditions.
+    accelerator = manifest.get("hardware", {}).get("accelerator") or {}
+    already_recorded = bool(accelerator.get("resident_model") or accelerator.get("device"))
+    if rows and not already_recorded:
+        captured = _accelerator_inventory()
+        if captured.get("resident_model"):
+            manifest.setdefault("hardware", {})["accelerator"] = captured
     manifest["completed_model_calls"] = len(rows)
     manifest["ollama_http_requests"] = sum(
         int(row.get("ollama_http_requests", 0)) for row in rows
@@ -1173,9 +1494,11 @@ async def run_evaluation(
     *,
     provider: CaseProvider,
     inventory: dict[str, Any],
-    output_dir: Path = RESULTS_DIR,
+    output_dir: Path | None = None,
     limit: int | None = None,
+    spec: ModelSpec = DEFAULT_SPEC,
 ) -> dict[str, Any]:
+    output_dir = spec.results_dir if output_dir is None else output_dir
     records = load_scenarios()
     errors = validate_all(records)
     if errors:
@@ -1183,9 +1506,9 @@ async def run_evaluation(
     _artifact, labels = load_label_artifact(records)
     subset = _load_repeat_subset(records)
     plan = _execution_plan(records, subset)
-    identity = _identity(records, subset, inventory)
-    if inventory["model_id"] != MODEL_ID:
-        raise RuntimeError(f"evaluation requires exact model id {MODEL_ID}")
+    identity = _identity(records, inventory)
+    if inventory["model_id"] != spec.model_id:
+        raise RuntimeError(f"evaluation requires exact model id {spec.model_id}")
 
     raw_path = output_dir / "raw.jsonl"
     csv_path = output_dir / "results.csv"
@@ -1198,7 +1521,7 @@ async def run_evaluation(
     else:
         if raw_path.exists() and raw_path.stat().st_size:
             raise RuntimeError("refusing raw-result resume without a run manifest")
-        manifest = _new_manifest(identity, inventory, subset)
+        manifest = _new_manifest(identity, inventory, subset, spec)
         _atomic_json(manifest_path, manifest)
 
     rows, repaired = _repair_and_load_jsonl(raw_path)
@@ -1210,16 +1533,25 @@ async def run_evaluation(
     ]
     selected = pending if limit is None else pending[: max(0, limit)]
 
+    interrupted = ""
+    rows_before = len(rows)
     for record, run_index in selected:
-        with ollama_only_network():
-            row = await _run_one(
-                record,
-                run_index,
-                provider=provider,
-                inventory=inventory,
-                identity=identity,
-                final_label=labels[record["id"]]["final"],
-            )
+        try:
+            with ollama_only_network():
+                row = await _run_one(
+                    record,
+                    run_index,
+                    provider=provider,
+                    inventory=inventory,
+                    identity=identity,
+                    final_label=labels[record["id"]]["final"],
+                )
+        except ProviderUnavailableError as exc:
+            # Stop rather than burn through every remaining case against a
+            # daemon that is not answering. Everything already on disk stays
+            # valid, and this case is still pending, so a resume repeats it.
+            interrupted = str(exc)
+            break
         _append_jsonl(raw_path, row)
         rows.append(row)
         completed.add(row["run_key"])
@@ -1244,13 +1576,22 @@ async def run_evaluation(
     return {
         "manifest": manifest,
         "summary": summary,
-        "new_rows": len(selected),
+        # Rows actually written, which is fewer than the rows selected when the
+        # daemon stopped answering part way through.
+        "new_rows": len(rows) - rows_before,
         "remaining_rows": len(plan) - len(rows),
+        "interrupted": interrupted,
     }
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--model",
+        choices=sorted(MODEL_SPECS),
+        default=DEFAULT_MODEL_KEY,
+        help="which registered configuration to run (default: the preregistered one)",
+    )
     parser.add_argument(
         "--resume",
         action="store_true",
@@ -1272,23 +1613,36 @@ def _parse_args() -> argparse.Namespace:
 
 async def _main_async() -> None:
     args = _parse_args()
-    inventory = await fetch_ollama_inventory()
+    spec = MODEL_SPECS[args.model]
+    inventory = await fetch_ollama_inventory(spec)
     if args.inventory_only:
         print(json.dumps(inventory, indent=2, sort_keys=True))
         return
     outcome = await run_evaluation(
-        provider=ProductionLocalOllamaProvider(),
+        provider=ProductionLocalOllamaProvider(spec),
         inventory=inventory,
         limit=args.limit,
+        spec=spec,
     )
     manifest = outcome["manifest"]
     print(
-        f"Model evaluation: {manifest['completed_model_calls']}/"
+        f"Model evaluation [{spec.key}]: {manifest['completed_model_calls']}/"
         f"{manifest['planned_model_calls']} calls complete; "
         f"{outcome['new_rows']} appended, {outcome['remaining_rows']} remaining."
     )
-    print(f"Raw: {RAW_JSONL}")
-    print("Resume: python benchmarks/intentseal/model_eval.py --resume")
+    print(f"Raw: {spec.results_dir / 'raw.jsonl'}")
+    print(
+        "Resume: python benchmarks/intentseal/model_eval.py "
+        f"--model {spec.key} --resume"
+    )
+    if outcome["interrupted"]:
+        print(f"\nStopped early: {outcome['interrupted']}")
+        print(
+            "No row was written for that case, so nothing recorded an "
+            "infrastructure failure as model behavior. Restart the local daemon "
+            "and resume."
+        )
+        raise SystemExit(1)
 
 
 def main() -> None:

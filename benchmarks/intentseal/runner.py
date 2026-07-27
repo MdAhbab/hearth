@@ -57,6 +57,22 @@ from hearth.assurance import (  # noqa: E402
 )
 from hearth.storage.db import Database  # noqa: E402
 
+
+def write_json(path: Path, payload: Any) -> None:
+    """Write pretty JSON with LF terminators on every platform.
+
+    ``Path.write_text`` applies the platform newline translation, so the same
+    result set produced identical text but a different SHA-256 on Windows and
+    on macOS.  The run manifests record the hash of each artifact, so the byte
+    form has to be platform-independent or a re-run elsewhere looks like a
+    changed result.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    with path.open("w", encoding="utf-8", newline="\n") as stream:
+        stream.write(text)
+
+
 HERE = Path(__file__).resolve().parent
 RESULTS_DIR = HERE / "results" / "v2"
 RESULTS_JSON = RESULTS_DIR / "results.json"
@@ -742,9 +758,7 @@ def _write_results(
     agreement: dict[str, Any],
 ) -> None:
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    RESULTS_JSON.write_text(
-        json.dumps(all_rows, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    write_json(RESULTS_JSON, all_rows)
     fields = list(all_rows[0]) if all_rows else []
     with RESULTS_CSV.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
@@ -761,10 +775,7 @@ def _write_results(
             "No model-in-the-loop evaluation was run."
         ),
     }
-    SUMMARY_JSON.write_text(
-        json.dumps(summary_payload, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    write_json(SUMMARY_JSON, summary_payload)
     manifest = {
         "schema_version": "2.0.0",
         "corpus_sha256": _sha256(SCENARIOS_PATH),
@@ -788,9 +799,7 @@ def _write_results(
         },
         "model_in_loop": "not run; reserved for the next phase",
     }
-    RUN_MANIFEST.write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    write_json(RUN_MANIFEST, manifest)
 
 
 async def _main_async() -> None:

@@ -4,9 +4,15 @@ The following files are retained only for audit history and are not canonical:
 
 - `scenarios.jsonl`
 - `schema.json`
-- `results/results.json`
-- `results/results.csv`
-- `results/summary.json`
+- `results/v1/results.json`
+- `results/v1/results.csv`
+- `results/v1/summary.json`
+
+They are kept rather than deleted so the change of method between the two
+versions can be inspected instead of taken on trust. The three result files
+used to sit loose in `results/`, beside the current per-model directories,
+where they were easy to mistake for current output; they now have their own
+directory.
 
 Version 1 generated labels from the monitor it evaluated and applied permitted
 effects directly to an emulator. Its reported policy match is therefore a

@@ -241,3 +241,40 @@ Layout: `src/hearth/` — `runtime/` (Ollama lifecycle + provider), `agent/`
 - [docs/research/intentseal-threat-catalog.md](docs/research/intentseal-threat-catalog.md) — the 100-case defensive threat catalog, taxonomy, and primary-source bibliography
 - [docs/research/intentseal-experiment.md](docs/research/intentseal-experiment.md) — baseline/full/ablation evaluation plan and measured results
 - [benchmarks/intentseal/](benchmarks/intentseal/) — the executable offline benchmark: 100 adversarial + 100 benign inert scenarios, digital-twin emulators with a network kill switch, and the JSON/CSV runner (`python benchmarks/intentseal/runner.py`)
+
+### Running the benchmark
+
+The deterministic regime needs no model. It writes `benchmarks/intentseal/results/v2/`
+and reproduces byte for byte on macOS and Windows:
+
+```bash
+python benchmarks/intentseal/runner.py
+python benchmarks/intentseal/build_docs.py     # regenerates the two research docs
+pytest tests/test_benchmark.py tests/test_model_eval.py
+```
+
+The model-in-the-loop regime drives the same gate with proposals from a real
+model served by a local Ollama daemon. Each configuration is listed in
+`MODEL_SPECS` in `benchmarks/intentseal/model_eval.py`, writes its own results
+directory, and is resumable, so re-issuing a command after an interruption
+continues from the calls already on disk:
+
+```bash
+python benchmarks/intentseal/model_eval.py --model qwen35-4b-x86 --resume
+python benchmarks/intentseal/run_model_evals.py qwen35-4b-x86 gemma4-e4b-x86
+```
+
+`run_model_evals.py` runs configurations strictly one at a time and unloads each
+model before starting the next, because the reported median latency and monitor
+overhead are only meaningful if no second model competed for the same hardware.
+Run it with no arguments to list the registered configurations.
+
+Adding a configuration is one `ModelSpec` entry. A local tag takes
+`expected_digest` and `expected_quantization`, so a silently replaced artifact
+aborts the run instead of being measured; an Ollama cloud tag leaves both `None`,
+and the run manifest records that it could not be pinned and that corpus text
+left the machine.
+
+The corpus, the frozen labels, and the repeat subset are pinned by SHA-256, and
+every recorded run identity carries those hashes. `.gitattributes` forces LF on
+those files so a checkout cannot change a hash without changing the content.

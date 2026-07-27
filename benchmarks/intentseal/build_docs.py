@@ -27,8 +27,9 @@ from benchmarks.intentseal.corpus import (  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 DOCS = _REPO / "docs" / "research"
-SUMMARY_PATH = HERE / "results" / "v2" / "summary.json"
-MODEL_RESULTS_DIR = HERE / "results" / "model"
+RESULTS_ROOT = HERE / "results"
+SUMMARY_PATH = RESULTS_ROOT / "v2" / "summary.json"
+MODEL_RESULTS_DIR = RESULTS_ROOT / "model"
 MODEL_SUMMARY_PATH = MODEL_RESULTS_DIR / "summary.json"
 MODEL_MANIFEST_PATH = MODEL_RESULTS_DIR / "run_manifest.json"
 MODEL_RAW_PATH = MODEL_RESULTS_DIR / "raw.jsonl"
@@ -36,6 +37,34 @@ MODEL_RAW_PATH = MODEL_RESULTS_DIR / "raw.jsonl"
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _write_doc(path: Path, text: str) -> None:
+    """Write a generated document with LF terminators on every platform.
+
+    ``Path.write_text`` applies the platform newline translation, which would
+    make a regenerated document differ on Windows and on macOS without any
+    result changing.
+    """
+    with path.open("w", encoding="utf-8", newline="\n") as stream:
+        stream.write(text)
+
+
+def _model_run_directories() -> list[Path]:
+    """Every per-model results directory, preregistered run first.
+
+    The preregistered configuration writes to ``results/model``; each further
+    configuration writes to ``results/model_<name>``.  Sorting the rest keeps
+    the generated document stable when a run is added.
+    """
+    if not RESULTS_ROOT.is_dir():
+        return []
+    others = sorted(
+        path
+        for path in RESULTS_ROOT.iterdir()
+        if path.is_dir() and path.name.startswith("model_")
+    )
+    return [MODEL_RESULTS_DIR, *others] if MODEL_RESULTS_DIR.is_dir() else others
 
 
 def _load_inputs():
@@ -57,55 +86,83 @@ def _load_inputs():
                 f"refusing stale results: {field} is {summary.get(field)!r}, "
                 f"expected {digest!r}"
             )
-    model_result = None
-    model_paths = (MODEL_SUMMARY_PATH, MODEL_MANIFEST_PATH, MODEL_RAW_PATH)
-    if any(path.exists() for path in model_paths):
-        if not all(path.exists() for path in model_paths):
-            raise SystemExit("model result artifacts are incomplete; refusing mixed docs")
-        model_summary = json.loads(MODEL_SUMMARY_PATH.read_text(encoding="utf-8"))
-        model_manifest = json.loads(MODEL_MANIFEST_PATH.read_text(encoding="utf-8"))
-        live_raw_rows = 0
-        if MODEL_RAW_PATH.exists():
-            live_raw_rows = sum(
-                1 for line in MODEL_RAW_PATH.read_text(encoding="utf-8").splitlines() if line.strip()
+    model_results = [
+        run
+        for directory in _model_run_directories()
+        if (run := _load_model_run(directory, expected)) is not None
+    ]
+    return records, artifact, labels, summary, model_results
+
+
+def _load_model_run(
+    directory: Path,
+    expected: dict[str, str],
+) -> tuple[str, dict[str, Any], dict[str, Any]] | None:
+    """Validate and load one per-model run, or return None if it has no rows.
+
+    Every configuration is checked against the same corpus and label hashes, so
+    a run measured against a different corpus is refused rather than documented
+    beside the others.
+    """
+    summary_path = directory / "summary.json"
+    manifest_path = directory / "run_manifest.json"
+    raw_path = directory / "raw.jsonl"
+    model_paths = (summary_path, manifest_path, raw_path)
+    if not any(path.exists() for path in model_paths):
+        return None
+    if not all(path.exists() for path in model_paths):
+        raise SystemExit(
+            f"model result artifacts are incomplete in {directory.name}; "
+            "refusing mixed docs"
+        )
+    model_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    model_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    live_raw_rows = sum(
+        1 for line in raw_path.read_text(encoding="utf-8").splitlines() if line.strip()
+    )
+    completed = max(int(model_summary.get("completed_model_calls", 0)), live_raw_rows)
+    if completed <= 0:
+        return None
+    model_identity = model_manifest.get("evaluation_identity", {})
+    for field, digest in expected.items():
+        if model_summary.get(field) != digest:
+            raise SystemExit(
+                f"refusing stale model summary in {directory.name}: "
+                f"{field} differs from {digest}"
             )
-        completed = max(int(model_summary.get("completed_model_calls", 0)), live_raw_rows)
-        if completed > 0:
-            model_identity = model_manifest.get("evaluation_identity", {})
-            for field, digest in expected.items():
-                if model_summary.get(field) != digest:
-                    raise SystemExit(
-                        f"refusing stale model summary: {field} differs from {digest}"
-                    )
-                if model_identity.get(field) != digest:
-                    raise SystemExit(
-                        f"refusing stale model manifest: {field} differs from {digest}"
-                    )
-            raw_artifact = model_manifest.get("artifacts", {}).get("raw_jsonl", {})
-            raw_digest = _sha256(MODEL_RAW_PATH)
-            status = str(model_summary.get("status") or model_manifest.get("status") or "")
-            if raw_artifact.get("sha256") != raw_digest:
-                if status != "incomplete":
-                    raise SystemExit("model raw JSONL hash differs from run manifest")
-                # Resumable pilots rewrite raw.jsonl between summary flushes.
-                # Document the incomplete state with the live raw digest.
-                model_summary = {
-                    **model_summary,
-                    "status": "incomplete",
-                    "incomplete_run_caveat": (
-                        "Partial model evaluation in progress. Live raw JSONL digest "
-                        f"{raw_digest} differs from the last flushed manifest artifact "
-                        f"{raw_artifact.get('sha256')!r}. No full-corpus model claim "
-                        "is supported."
-                    ),
-                    "live_raw_sha256": raw_digest,
-                    "completed_model_calls": completed,
-                }
-            elif int(model_manifest.get("completed_model_calls", -1)) != completed:
-                if status != "incomplete":
-                    raise SystemExit("model summary and manifest row counts differ")
-            model_result = (model_summary, model_manifest)
-    return records, artifact, labels, summary, model_result
+        if model_identity.get(field) != digest:
+            raise SystemExit(
+                f"refusing stale model manifest in {directory.name}: "
+                f"{field} differs from {digest}"
+            )
+    raw_artifact = model_manifest.get("artifacts", {}).get("raw_jsonl", {})
+    raw_digest = _sha256(raw_path)
+    status = str(model_summary.get("status") or model_manifest.get("status") or "")
+    if raw_artifact.get("sha256") != raw_digest:
+        if status != "incomplete":
+            raise SystemExit(
+                f"model raw JSONL hash differs from run manifest in {directory.name}"
+            )
+        # Resumable pilots rewrite raw.jsonl between summary flushes.
+        # Document the incomplete state with the live raw digest.
+        model_summary = {
+            **model_summary,
+            "status": "incomplete",
+            "incomplete_run_caveat": (
+                "Partial model evaluation in progress. Live raw JSONL digest "
+                f"{raw_digest} differs from the last flushed manifest artifact "
+                f"{raw_artifact.get('sha256')!r}. No full-corpus model claim "
+                "is supported."
+            ),
+            "live_raw_sha256": raw_digest,
+            "completed_model_calls": completed,
+        }
+    elif int(model_manifest.get("completed_model_calls", -1)) != completed:
+        if status != "incomplete":
+            raise SystemExit(
+                f"model summary and manifest row counts differ in {directory.name}"
+            )
+    return directory.name, model_summary, model_manifest
 
 
 def _catalog(
@@ -183,9 +240,154 @@ def _catalog(
     return "\n".join(lines)
 
 
+def _machine(manifest: dict[str, Any]) -> str:
+    hardware = manifest.get("hardware", {})
+    brand = str(hardware.get("cpu_brand") or "").strip()
+    if brand:
+        for noise in ("(R)", "(TM)", "CPU", "Processor"):
+            brand = brand.replace(noise, " ")
+        return " ".join(brand.split()).split("@")[0].strip()
+    return str(hardware.get("platform") or "unrecorded").split("-")[0]
+
+
+def _model_section(
+    model_results: list[tuple[str, dict[str, Any], dict[str, Any]]],
+) -> list[str]:
+    """Render one row per evaluated configuration, plus its identity block.
+
+    Model behavior and monitor behavior stay in separate column groups here for
+    the same reason they do in the paper: collapsing them into one score would
+    rank a model that proposes nothing above a model that does the user's work.
+    """
+    if not model_results:
+        return [
+            "## Model-in-the-loop phase",
+            "",
+            "No model row exists yet. The preregistered schedule is 200 base "
+            "records plus two additional runs of 40 selected records (280 local "
+            "model calls total). No model efficacy, latency, or variance result "
+            "is stated or implied.",
+            "",
+        ]
+
+    total_calls = sum(
+        int(summary.get("completed_model_calls", 0)) for _, summary, _ in model_results
+    )
+    incomplete = [
+        name for name, summary, _ in model_results if summary.get("status") != "complete"
+    ]
+    lines = [
+        "## Model-in-the-loop configurations (separate measured phase)",
+        "",
+        f"{len(model_results)} configuration(s), {total_calls} completed model calls. "
+        "Every configuration ran the same corpus, the same frozen labels, and the "
+        "same deterministic gate; only the model and the machine differ. These "
+        "figures describe model proposals and the monitor's handling of them, "
+        "never merged into one score and never merged with the deterministic "
+        "configuration comparison above.",
+        "",
+    ]
+    if incomplete:
+        lines.extend(
+            [
+                f"Incomplete run(s): {', '.join(incomplete)}. Missing records were "
+                "not imputed and support no full-corpus claim.",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "### Identity",
+            "",
+            "| Directory | Model | Digest | Quant. | Ollama | Machine | Calls | Status |",
+            "|---|---|---|---|---|---|---:|---|",
+        ]
+    )
+    for name, summary, manifest in model_results:
+        inventory = manifest.get("model_inventory", {})
+        digest = str(inventory.get("model_digest") or "")
+        lines.append(
+            f"| `{name}` | `{inventory.get('model_id', '')}` "
+            f"| `{digest[:16] + '...' if digest else 'not content-addressable'}` "
+            f"| {inventory.get('quantization') or 'undisclosed'} "
+            f"| {inventory.get('ollama_version', '')} "
+            f"| {_machine(manifest)} "
+            f"| {summary.get('completed_model_calls', 0)} "
+            f"| {summary.get('status', '')} |"
+        )
+    lines.extend(
+        [
+            "",
+            "### Model behavior on the base records",
+            "",
+            "| Directory | Correct tool | Unsafe proposal (adv.) | No tool | "
+            "Refusal or parse failure | Parse failure |",
+            "|---|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for name, summary, _ in model_results:
+        behavior = summary["base_runs_only"]["model_behavior"]
+        lines.append(
+            f"| `{name}` "
+            f"| {behavior['correct_tool_proposed_rate']:.3f} "
+            f"| {behavior['proposal_diversion_rate_adversarial']:.3f} "
+            f"| {behavior['no_tool_proposed_rate']:.3f} "
+            f"| {behavior['refusal_or_parse_failure_rate']:.3f} "
+            f"| {behavior['parse_failure_rate']:.3f} |"
+        )
+    lines.extend(
+        [
+            "",
+            "### Monitor and execution on those proposals",
+            "",
+            "| Directory | Attempted misuse (adv.) | Policy acc. when proposed | "
+            "Observed harm (adv.) | Canary | Benign success | Seal before handler |",
+            "|---|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for name, summary, _ in model_results:
+        monitored = summary["base_runs_only"]["monitor_and_execution"]
+        lines.append(
+            f"| `{name}` "
+            f"| {monitored['attempted_misuse_rate_adversarial']:.3f} "
+            f"| {monitored['policy_accuracy_when_proposed']:.3f} "
+            f"| {monitored['observed_harm_rate_adversarial']:.3f} "
+            f"| {monitored['canary_disclosure_rate']:.3f} "
+            f"| {monitored['benign_task_success_rate']:.3f} "
+            f"| {monitored['seal_before_handler_rate']:.3f} |"
+        )
+    lines.extend(
+        [
+            "",
+            "Rates conditioned on a proposal have a per-configuration denominator, "
+            "because each model decides how often it proposes anything at all. "
+            "Read them beside the decision counts in each `summary.json` rather "
+            "than as like-for-like point estimates.",
+            "",
+            "Latency and repeat-proposal variation are machine-dependent and are "
+            "left in each `summary.json` rather than tabulated across machines "
+            "here.",
+            "",
+            "Run or resume one configuration:",
+            "",
+            "```bash",
+            "python benchmarks/intentseal/model_eval.py --model <key> --resume",
+            "```",
+            "",
+            "Run several, strictly one at a time:",
+            "",
+            "```bash",
+            "python benchmarks/intentseal/run_model_evals.py <key> <key>",
+            "```",
+            "",
+        ]
+    )
+    return lines
+
+
 def _experiment(
     summary: dict[str, Any],
-    model_result: tuple[dict[str, Any], dict[str, Any]] | None = None,
+    model_results: list[tuple[str, dict[str, Any], dict[str, Any]]] | None = None,
 ) -> str:
     configs = summary["configurations"]
     lines = [
@@ -276,63 +478,7 @@ def _experiment(
             "",
         ]
     )
-    if model_result is None:
-        lines.extend(
-            [
-                "## Model-in-the-loop phase",
-                "",
-                "No model row exists yet. The preregistered schedule is 200 base "
-                "records plus two additional runs of 40 selected records (280 local "
-                "model calls total). No model efficacy, latency, or variance result "
-                "is stated or implied.",
-                "",
-            ]
-        )
-    else:
-        model_summary, model_manifest = model_result
-        identity = model_manifest["evaluation_identity"]
-        base = model_summary["base_runs_only"]
-        behavior = base["model_behavior"]
-        monitored = base["monitor_and_execution"]
-        complete = model_summary["status"] == "complete"
-        lines.extend(
-            [
-                "## Local model behavior (separate measured phase)",
-                "",
-                f"Status: **{'complete' if complete else 'incomplete pilot'}**; "
-                f"{model_summary['completed_model_calls']}/"
-                f"{model_summary['planned_model_calls']} preregistered calls exist. "
-                "Missing records were not imputed. These figures describe model "
-                "proposals and subsequent monitor handling, not the deterministic "
-                "v2 configuration comparison above.",
-                "",
-                f"Model: `{identity['model_id']}`; digest "
-                f"`{identity['model_digest']}`; quantization "
-                f"`{identity['model_quantization']}`. Temperature 0 was requested, "
-                "but no deterministic model-behavior claim is made.",
-                "",
-                f"Completed base records: {base['records']}/200. Model behavior on "
-                "those completed base rows: no-tool rate "
-                f"{behavior['no_tool_proposed_rate']}, exact canonical proposal rate "
-                f"{behavior['correct_tool_proposed_rate']}, adversarial proposal-"
-                f"diversion rate {behavior['proposal_diversion_rate_adversarial']}, "
-                "and refusal/parse-failure rate "
-                f"{behavior['refusal_or_parse_failure_rate']}.",
-                "",
-                "Monitor/execution outcomes for those same observed proposals: "
-                f"benign task success {monitored['benign_task_success_rate']}, "
-                f"adversarial attempted misuse {monitored['attempted_misuse_rate_adversarial']}, "
-                f"observed harm {monitored['observed_harm_rate_adversarial']}, and "
-                f"canary disclosure {monitored['canary_disclosure_rate']}.",
-                "",
-                "Complete/resume command:",
-                "",
-                "```bash",
-                "python benchmarks/intentseal/model_eval.py --resume",
-                "```",
-                "",
-            ]
-        )
+    lines.extend(_model_section(model_results or []))
     lines.extend(
         [
             "_Generated only after validating the deterministic and optional "
@@ -344,20 +490,15 @@ def _experiment(
 
 
 def main() -> None:
-    records, _artifact, labels, summary, model_result = _load_inputs()
+    records, _artifact, labels, summary, model_results = _load_inputs()
     agreement = agreement_statistics(labels)
     DOCS.mkdir(parents=True, exist_ok=True)
     catalog_path = DOCS / "intentseal-threat-catalog.md"
     experiment_path = DOCS / "intentseal-experiment.md"
-    catalog_path.write_text(
-        _catalog(records, labels, agreement), encoding="utf-8"
-    )
-    experiment_path.write_text(
-        _experiment(summary, model_result),
-        encoding="utf-8",
-    )
+    _write_doc(catalog_path, _catalog(records, labels, agreement))
+    _write_doc(experiment_path, _experiment(summary, model_results))
     print(f"Wrote {catalog_path}")
-    print(f"Wrote {experiment_path}")
+    print(f"Wrote {experiment_path} with {len(model_results)} model configuration(s)")
 
 
 if __name__ == "__main__":
